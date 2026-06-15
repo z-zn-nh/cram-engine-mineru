@@ -5,6 +5,10 @@
 
 仓库地址：[z-zn-nh/cram-engine-mineru](https://github.com/z-zn-nh/cram-engine-mineru)
 
+## 桌面 App 方向
+
+本 fork 的核心定位仍然是期末速成引擎。后续桌面 App 会采用类似 Codex 的三栏工作区：左侧是学科文件夹，中间是对话式复习，右侧是引用资料来源与产出结果。现有 Skill / Agent 入口会保留，但桌面 App 会成为主要体验。
+
 ## 这是什么
 
 这是一个给 AI Agent 用的期末复习 Skill / 项目规则包，不是普通 Web 应用。
