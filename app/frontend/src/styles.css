@@ -345,6 +345,55 @@ input {
   font: 13px/1.6 Consolas, "SFMono-Regular", monospace;
 }
 
+.mindmap-preview {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.mindmap-preview strong {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.mindmap-preview ul {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 18px;
+}
+
+.mindmap-preview li {
+  list-style: none;
+  position: relative;
+}
+
+.mindmap-preview li::before {
+  content: "";
+  position: absolute;
+  left: -13px;
+  top: 13px;
+  width: 9px;
+  border-top: 1px solid #b7c5d8;
+}
+
+.mindmap-node {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #ffffff;
+}
+
+.mindmap-node span {
+  font-weight: 650;
+}
+
+.mindmap-node small {
+  color: #6b7788;
+  line-height: 1.4;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);

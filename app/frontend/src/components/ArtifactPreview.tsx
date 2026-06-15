@@ -1,5 +1,6 @@
 import { FileText } from "lucide-react";
 import type { ArtifactContent, ChatArtifact } from "../api/client";
+import { MindMapPreview, type MindMapDocument } from "./MindMapPreview";
 
 type ArtifactPreviewProps = {
   artifact?: ChatArtifact;
@@ -8,6 +9,8 @@ type ArtifactPreviewProps = {
 };
 
 export function ArtifactPreview({ artifact, content, isLoading }: ArtifactPreviewProps) {
+  const mindMap = artifact?.artifact_type === "mindmap" && content ? parseMindMap(content.content) : undefined;
+
   if (!artifact) {
     return (
       <div className="artifact-preview empty-state">
@@ -29,11 +32,25 @@ export function ArtifactPreview({ artifact, content, isLoading }: ArtifactPrevie
 
       {isLoading && <p className="empty-state">正在读取产物内容...</p>}
 
-      {!isLoading && content && <pre>{content.content}</pre>}
+      {!isLoading && mindMap && <MindMapPreview mindMap={mindMap} />}
+
+      {!isLoading && content && !mindMap && <pre>{content.content}</pre>}
 
       {!isLoading && !content && (
         <p className="empty-state">这个产物还没有可预览内容，生成后会保存在当前学科文件夹。</p>
       )}
     </div>
   );
+}
+
+function parseMindMap(content: string): MindMapDocument | undefined {
+  try {
+    const payload = JSON.parse(content);
+    if (!payload || typeof payload.title !== "string" || !Array.isArray(payload.nodes)) {
+      return undefined;
+    }
+    return payload as MindMapDocument;
+  } catch {
+    return undefined;
+  }
 }
