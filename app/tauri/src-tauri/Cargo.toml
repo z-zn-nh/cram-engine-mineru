@@ -1,0 +1,15 @@
+[package]
+name = "cram-engine-mineru"
+version = "0.1.0"
+description = "Codex-like desktop shell for cram-engine-mineru"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
