@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { Bot, FileText, Upload } from "lucide-react";
-import { createSubject, listSubjects, type SubjectSummary } from "./api/client";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FileText } from "lucide-react";
+import { createSubject, listSubjects, type ChatArtifact, type ChatCitation, type SubjectSummary } from "./api/client";
+import { ReviewChat } from "./components/ReviewChat";
 import { SubjectSidebar } from "./components/SubjectSidebar";
 
 const fallbackSubjects: SubjectSummary[] = [
@@ -9,24 +10,32 @@ const fallbackSubjects: SubjectSummary[] = [
   { name: "机器学习", slug: "机器学习" },
 ];
 
-const citations = [
+const fallbackCitations: ChatCitation[] = [
   {
-    source: "教材.pdf",
+    source_file: "教材.pdf",
     locator: "第 45 页",
+    citation_label: "教材.pdf:第45页",
     excerpt: "调制是把基带信号搬移到载波上的过程。",
   },
   {
-    source: "第 3 讲.pptx",
+    source_file: "第 3 讲.pptx",
     locator: "第 8 页",
+    citation_label: "第3讲.pptx:第8页",
     excerpt: "AM、FM、ASK、FSK、PSK 的对比。",
   },
 ];
 
-const artifacts = ["期末速成路线.md", "通信原理总图.json", "调制解调练习题.md"];
+const fallbackArtifacts: ChatArtifact[] = [
+  { title: "期末速成路线.md", artifact_type: "cram_plan" },
+  { title: "通信原理总图.json", artifact_type: "mindmap" },
+  { title: "调制解调练习题.md", artifact_type: "qbank" },
+];
 
 export function App() {
   const [subjects, setSubjects] = useState<SubjectSummary[]>(fallbackSubjects);
   const [selectedSlug, setSelectedSlug] = useState(fallbackSubjects[0].slug);
+  const [latestCitations, setLatestCitations] = useState<ChatCitation[]>([]);
+  const [latestArtifacts, setLatestArtifacts] = useState<ChatArtifact[]>([]);
 
   useEffect(() => {
     let isMounted = true;
@@ -71,6 +80,17 @@ export function App() {
     setSelectedSlug(created.slug);
   }
 
+  const handleChatResult = useCallback(
+    (result: { citations: ChatCitation[]; artifacts: ChatArtifact[] }) => {
+      setLatestCitations(result.citations);
+      setLatestArtifacts(result.artifacts);
+    },
+    [],
+  );
+
+  const visibleCitations = latestCitations.length > 0 ? latestCitations : fallbackCitations;
+  const visibleArtifacts = latestArtifacts.length > 0 ? latestArtifacts : fallbackArtifacts;
+
   return (
     <main className="shell">
       <SubjectSidebar
@@ -81,44 +101,21 @@ export function App() {
       />
 
       <section className="chat-pane">
-        <header className="chat-header">
-          <div>
-            <h1>{selectedSubject.name}</h1>
-            <p>对话式复习 · 基于资料引用 · 产物自动归档</p>
-          </div>
-          <button className="upload-button" type="button">
-            <Upload size={16} />
-            上传资料
-          </button>
-        </header>
-
-        <div className="messages">
-          <article className="message user">帮我根据这些 PPT 生成期末速成路线。</article>
-          <article className="message assistant">
-            <div className="assistant-title">
-              <Bot size={16} />
-              <span>已根据资料拆出 5 个核心模块</span>
-            </div>
-            <p>
-              优先复习调制解调、傅里叶分析、信道噪声、抽样定理和数字调制。每个模块会附引用来源，生成的速成路线会保存到当前学科文件夹。
-            </p>
-          </article>
-        </div>
-
-        <form className="composer">
-          <input aria-label="复习输入" placeholder="继续提问、让它讲解、出题或生成思维导图..." />
-          <button type="button">发送</button>
-        </form>
+        <ReviewChat
+          subjectName={selectedSubject.name}
+          subjectSlug={selectedSubject.slug}
+          onChatResult={handleChatResult}
+        />
       </section>
 
       <aside className="result-pane">
         <section>
           <h2>引用资料</h2>
           <div className="stack">
-            {citations.map((citation) => (
-              <article className="citation" key={`${citation.source}-${citation.locator}`}>
+            {visibleCitations.map((citation) => (
+              <article className="citation" key={`${citation.source_file}-${citation.locator}-${citation.chunk_id}`}>
                 <div>
-                  {citation.source} · {citation.locator}
+                  {citation.source_file} · {citation.locator}
                 </div>
                 <p>{citation.excerpt}</p>
               </article>
@@ -129,10 +126,10 @@ export function App() {
         <section>
           <h2>产出结果</h2>
           <div className="stack">
-            {artifacts.map((artifact) => (
-              <button className="artifact" key={artifact} type="button">
+            {visibleArtifacts.map((artifact) => (
+              <button className="artifact" key={`${artifact.artifact_type}-${artifact.title}`} type="button">
                 <FileText size={15} />
-                <span>{artifact}</span>
+                <span>{artifact.title}</span>
               </button>
             ))}
           </div>
