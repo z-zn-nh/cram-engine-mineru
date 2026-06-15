@@ -56,7 +56,12 @@ def load_chunks(subject: Subject) -> list[ChunkRecord]:
 
 
 def _query_terms(query: str) -> list[str]:
-    return [term for term in re.split(r"\s+", query.strip().lower()) if term]
+    normalized = query.strip().lower()
+    terms = [term for term in re.split(r"\s+", normalized) if term]
+    compact = re.sub(r"\s+", "", normalized)
+    if compact and compact == normalized and len(compact) > 2:
+        terms.extend(compact[index : index + 2] for index in range(len(compact) - 1))
+    return list(dict.fromkeys(terms))
 
 
 def search_chunks(subject: Subject, query: str, *, limit: int = 5) -> list[ChunkRecord]:
@@ -73,4 +78,3 @@ def search_chunks(subject: Subject, query: str, *, limit: int = 5) -> list[Chunk
 
     scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
     return [chunk for _, chunk in scored[:limit]]
-
