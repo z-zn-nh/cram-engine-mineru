@@ -5,6 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.backend.cram_app.api import create_app
+from app.backend.cram_app.artifacts import save_artifact
 from app.backend.cram_app.chunks import ChunkRecord, append_chunks
 from app.backend.cram_app.subjects import create_subject
 
@@ -51,6 +52,36 @@ class ApiContractTests(unittest.TestCase):
 
             self.assertEqual(client.get("/subjects/通信原理/artifacts").status_code, 200)
             self.assertEqual(client.get("/subjects/通信原理/citations").status_code, 200)
+
+    def test_artifact_content_endpoint_reads_inside_subject_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subject = create_subject("signals", root)
+            artifact = save_artifact(
+                subject,
+                artifact_type="notes",
+                title="chapter-1",
+                content="# Signals\n\nCore notes.",
+                citations=[],
+                fmt="md",
+            )
+            client = TestClient(create_app(subjects_root=root, llm=FakeLLM()))
+
+            response = client.get(
+                "/subjects/signals/artifacts/content",
+                params={"relative_path": artifact.relative_path.as_posix()},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["relative_path"], artifact.relative_path.as_posix())
+            self.assertEqual(payload["content"], "# Signals\n\nCore notes.")
+
+            escaped = client.get(
+                "/subjects/signals/artifacts/content",
+                params={"relative_path": "../subject.sqlite"},
+            )
+            self.assertEqual(escaped.status_code, 400)
 
 
 if __name__ == "__main__":

@@ -1,34 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FileText } from "lucide-react";
 import { createSubject, listSubjects, type ChatArtifact, type ChatCitation, type SubjectSummary } from "./api/client";
 import { ReviewChat } from "./components/ReviewChat";
+import { RightPanel } from "./components/RightPanel";
 import { SubjectSidebar } from "./components/SubjectSidebar";
 
 const fallbackSubjects: SubjectSummary[] = [
   { name: "通信原理", slug: "通信原理" },
   { name: "数字电路", slug: "数字电路" },
   { name: "机器学习", slug: "机器学习" },
-];
-
-const fallbackCitations: ChatCitation[] = [
-  {
-    source_file: "教材.pdf",
-    locator: "第 45 页",
-    citation_label: "教材.pdf:第45页",
-    excerpt: "调制是把基带信号搬移到载波上的过程。",
-  },
-  {
-    source_file: "第 3 讲.pptx",
-    locator: "第 8 页",
-    citation_label: "第3讲.pptx:第8页",
-    excerpt: "AM、FM、ASK、FSK、PSK 的对比。",
-  },
-];
-
-const fallbackArtifacts: ChatArtifact[] = [
-  { title: "期末速成路线.md", artifact_type: "cram_plan" },
-  { title: "通信原理总图.json", artifact_type: "mindmap" },
-  { title: "调制解调练习题.md", artifact_type: "qbank" },
 ];
 
 export function App() {
@@ -88,9 +67,6 @@ export function App() {
     [],
   );
 
-  const visibleCitations = latestCitations.length > 0 ? latestCitations : fallbackCitations;
-  const visibleArtifacts = latestArtifacts.length > 0 ? latestArtifacts : fallbackArtifacts;
-
   return (
     <main className="shell">
       <SubjectSidebar
@@ -108,33 +84,11 @@ export function App() {
         />
       </section>
 
-      <aside className="result-pane">
-        <section>
-          <h2>引用资料</h2>
-          <div className="stack">
-            {visibleCitations.map((citation) => (
-              <article className="citation" key={`${citation.source_file}-${citation.locator}-${citation.chunk_id}`}>
-                <div>
-                  {citation.source_file} · {citation.locator}
-                </div>
-                <p>{citation.excerpt}</p>
-              </article>
-            ))}
-          </div>
-        </section>
-
-        <section>
-          <h2>产出结果</h2>
-          <div className="stack">
-            {visibleArtifacts.map((artifact) => (
-              <button className="artifact" key={`${artifact.artifact_type}-${artifact.title}`} type="button">
-                <FileText size={15} />
-                <span>{artifact.title}</span>
-              </button>
-            ))}
-          </div>
-        </section>
-      </aside>
+      <RightPanel
+        latestArtifacts={latestArtifacts}
+        latestCitations={latestCitations}
+        subjectSlug={selectedSubject.slug}
+      />
     </main>
   );
 }

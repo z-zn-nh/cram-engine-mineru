@@ -18,6 +18,12 @@ export type ChatArtifact = {
   relative_path?: string;
 };
 
+export type ArtifactContent = {
+  title: string;
+  relative_path: string;
+  content: string;
+};
+
 export type ChatResponse = {
   message: string;
   citations: ChatCitation[];
@@ -46,6 +52,31 @@ export async function sendChatMessage(subjectSlug: string, message: string): Pro
   });
   if (!response.ok) {
     throw await responseError(response, "Failed to send chat message");
+  }
+  return response.json();
+}
+
+export async function listArtifacts(subjectSlug: string): Promise<ChatArtifact[]> {
+  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts`);
+  if (!response.ok) {
+    throw await responseError(response, "Failed to load artifacts");
+  }
+  return response.json();
+}
+
+export async function listCitations(subjectSlug: string): Promise<ChatCitation[]> {
+  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/citations`);
+  if (!response.ok) {
+    throw await responseError(response, "Failed to load citations");
+  }
+  return response.json();
+}
+
+export async function readArtifactContent(subjectSlug: string, relativePath: string): Promise<ArtifactContent> {
+  const params = new URLSearchParams({ relative_path: relativePath });
+  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts/content?${params}`);
+  if (!response.ok) {
+    throw await responseError(response, "Failed to read artifact");
   }
   return response.json();
 }

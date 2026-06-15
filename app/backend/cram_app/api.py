@@ -84,6 +84,24 @@ def _read_citations(subject: Subject) -> list[dict[str, Any]]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_artifact_content(subject: Subject, relative_path: str) -> dict[str, Any]:
+    artifacts_root = (subject.path / "artifacts").resolve()
+    selected = (subject.path / relative_path).resolve()
+    try:
+        selected.relative_to(artifacts_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="artifact path must stay inside subject artifacts") from exc
+    if not selected.exists() or not selected.is_file():
+        raise HTTPException(status_code=404, detail="artifact not found")
+    if selected.name.endswith(".citations.json"):
+        raise HTTPException(status_code=400, detail="citation sidecars are not preview artifacts")
+    return {
+        "title": selected.stem,
+        "relative_path": selected.relative_to(subject.path).as_posix(),
+        "content": selected.read_text(encoding="utf-8"),
+    }
+
+
 def create_app(*, subjects_root: Path | None = None, llm: LLMClient | None = None) -> FastAPI:
     root = subjects_root or default_subjects_root()
     root.mkdir(parents=True, exist_ok=True)
@@ -123,9 +141,12 @@ def create_app(*, subjects_root: Path | None = None, llm: LLMClient | None = Non
     def get_artifacts(subject: str) -> list[dict[str, Any]]:
         return _list_artifacts(_get_subject(root, subject))
 
+    @app.get("/subjects/{subject}/artifacts/content")
+    def get_artifact_content(subject: str, relative_path: str) -> dict[str, Any]:
+        return _read_artifact_content(_get_subject(root, subject), relative_path)
+
     @app.get("/subjects/{subject}/citations")
     def get_citations(subject: str) -> list[dict[str, Any]]:
         return _read_citations(_get_subject(root, subject))
 
     return app
-

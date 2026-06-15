@@ -281,6 +281,70 @@ input {
   background: #ffffff;
 }
 
+.artifact.active {
+  border-color: #8ebcf6;
+  background: #edf4ff;
+  color: #223042;
+}
+
+.artifact-list {
+  max-height: 220px;
+  overflow: auto;
+}
+
+.empty-state {
+  margin: 0;
+  color: #6b7788;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.artifact-preview {
+  border: 1px solid #d9e0ea;
+  border-radius: 8px;
+  background: #fbfcff;
+  padding: 12px;
+}
+
+.artifact-preview.empty-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.artifact-preview-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.artifact-preview-header div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.artifact-preview-header strong,
+.artifact-preview-header span {
+  overflow-wrap: anywhere;
+}
+
+.artifact-preview-header span {
+  color: #6b7788;
+  font-size: 12px;
+}
+
+.artifact-preview pre {
+  max-height: 320px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #263242;
+  font: 13px/1.6 Consolas, "SFMono-Regular", monospace;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
