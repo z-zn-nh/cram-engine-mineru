@@ -27,3 +27,8 @@ skills-lock.json
 __pycache__/
 *.pyc
 .venv/
+
+# Frontend dependencies and build output
+node_modules/
+dist/
+*.tsbuildinfo
