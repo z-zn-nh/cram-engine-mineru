@@ -3,10 +3,16 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
+import httpx
+
 from .settings import LLMSettings
 
 
 class LLMConfigurationError(RuntimeError):
+    pass
+
+
+class LLMRequestError(RuntimeError):
     pass
 
 
@@ -16,8 +22,16 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatibleClient:
-    def __init__(self, settings: LLMSettings):
+    def __init__(
+        self,
+        settings: LLMSettings,
+        *,
+        http_client: httpx.Client | None = None,
+        timeout: float = 60.0,
+    ):
         self.settings = settings
+        self._http_client = http_client
+        self.timeout = timeout
 
     @property
     def api_key(self) -> str:
@@ -29,5 +43,22 @@ class OpenAICompatibleClient:
         return value
 
     def chat(self, messages: list[dict], *, stream: bool = False) -> str:
-        raise NotImplementedError("OpenAI-compatible HTTP calls will be wired in the API layer.")
+        url = self.settings.base_url.rstrip("/") + "/chat/completions"
+        payload = {"model": self.settings.model, "messages": messages, "stream": False}
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            if self._http_client is not None:
+                response = self._http_client.post(url, json=payload, headers=headers)
+            else:
+                response = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise LLMRequestError(f"LLM request failed: {exc}") from exc
 
+        try:
+            return response.json()["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, ValueError) as exc:
+            raise LLMRequestError(f"Unexpected LLM response shape: {exc}") from exc

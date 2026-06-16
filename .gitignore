@@ -32,3 +32,9 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Desktop sidecar build output
+app/backend/build/
+app/backend/dist/
+app/backend/*.spec.tmp
+app/tauri/src-tauri/binaries/*.exe

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from .artifacts import ARTIFACT_DIRS
 from .chat import CramChatService
-from .llm import LLMClient
+from .llm import LLMClient, LLMConfigurationError, LLMRequestError
 from .paths import default_subjects_root
 from .subjects import Subject, create_subject, subject_slug
 
@@ -130,7 +130,12 @@ def create_app(*, subjects_root: Path | None = None, llm: LLMClient | None = Non
         if llm is None:
             raise HTTPException(status_code=503, detail="LLM client is not configured")
         selected = _get_subject(root, subject)
-        response = CramChatService(llm).review(selected, request.message)
+        try:
+            response = CramChatService(llm).review(selected, request.message)
+        except LLMConfigurationError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except LLMRequestError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return {
             "message": response.message,
             "citations": response.citations,

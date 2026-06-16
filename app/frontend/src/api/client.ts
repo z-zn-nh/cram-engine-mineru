@@ -30,14 +30,25 @@ export type ChatResponse = {
   artifacts: ChatArtifact[];
 };
 
+const API_BASE_URL = import.meta.env.VITE_CRAM_BACKEND_URL ?? "http://127.0.0.1:8000";
+
+function apiUrl(path: string): string {
+  return `${API_BASE_URL}${path}`;
+}
+
 async function responseError(response: Response, fallback: string): Promise<Error> {
   const payload = await response.json().catch(() => undefined);
   const detail = typeof payload?.detail === "string" ? payload.detail : fallback;
   return new Error(detail);
 }
 
+export async function healthCheck(): Promise<boolean> {
+  const response = await fetch(apiUrl("/health"));
+  return response.ok;
+}
+
 export async function listSubjects(): Promise<SubjectSummary[]> {
-  const response = await fetch("/subjects");
+  const response = await fetch(apiUrl("/subjects"));
   if (!response.ok) {
     throw new Error("Failed to load subjects");
   }
@@ -45,7 +56,7 @@ export async function listSubjects(): Promise<SubjectSummary[]> {
 }
 
 export async function sendChatMessage(subjectSlug: string, message: string): Promise<ChatResponse> {
-  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/chat`, {
+  const response = await fetch(apiUrl(`/subjects/${encodeURIComponent(subjectSlug)}/chat`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message }),
@@ -57,7 +68,7 @@ export async function sendChatMessage(subjectSlug: string, message: string): Pro
 }
 
 export async function listArtifacts(subjectSlug: string): Promise<ChatArtifact[]> {
-  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts`);
+  const response = await fetch(apiUrl(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts`));
   if (!response.ok) {
     throw await responseError(response, "Failed to load artifacts");
   }
@@ -65,7 +76,7 @@ export async function listArtifacts(subjectSlug: string): Promise<ChatArtifact[]
 }
 
 export async function listCitations(subjectSlug: string): Promise<ChatCitation[]> {
-  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/citations`);
+  const response = await fetch(apiUrl(`/subjects/${encodeURIComponent(subjectSlug)}/citations`));
   if (!response.ok) {
     throw await responseError(response, "Failed to load citations");
   }
@@ -74,7 +85,7 @@ export async function listCitations(subjectSlug: string): Promise<ChatCitation[]
 
 export async function readArtifactContent(subjectSlug: string, relativePath: string): Promise<ArtifactContent> {
   const params = new URLSearchParams({ relative_path: relativePath });
-  const response = await fetch(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts/content?${params}`);
+  const response = await fetch(apiUrl(`/subjects/${encodeURIComponent(subjectSlug)}/artifacts/content?${params}`));
   if (!response.ok) {
     throw await responseError(response, "Failed to read artifact");
   }
@@ -82,7 +93,7 @@ export async function readArtifactContent(subjectSlug: string, relativePath: str
 }
 
 export async function createSubject(name: string): Promise<SubjectSummary> {
-  const response = await fetch("/subjects", {
+  const response = await fetch(apiUrl("/subjects"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),

@@ -14,3 +14,6 @@ def default_app_data_root() -> Path:
 def default_subjects_root() -> Path:
     return default_app_data_root() / "subjects"
 
+
+def default_settings_path() -> Path:
+    return default_app_data_root() / "settings.json"

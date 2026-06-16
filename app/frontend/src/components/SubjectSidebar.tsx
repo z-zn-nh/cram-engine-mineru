@@ -16,6 +16,7 @@ export type Subject = {
 };
 
 type SubjectSidebarProps = {
+  backendReady: boolean;
   subjects: Subject[];
   selectedSlug: string;
   onCreateSubject: () => void;
@@ -33,6 +34,7 @@ const groups = [
 ];
 
 export function SubjectSidebar({
+  backendReady,
   subjects,
   selectedSlug,
   onCreateSubject,
@@ -43,6 +45,10 @@ export function SubjectSidebar({
       <div className="brand">
         <BookOpen size={20} />
         <span>期末速成</span>
+      </div>
+      <div className={backendReady ? "backend-status ready" : "backend-status"}>
+        <span />
+        {backendReady ? "后端已连接" : "等待后端"}
       </div>
 
       <button className="new-subject" type="button" onClick={onCreateSubject}>

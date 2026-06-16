@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createSubject, listSubjects, type ChatArtifact, type ChatCitation, type SubjectSummary } from "./api/client";
+import {
+  createSubject,
+  healthCheck,
+  listSubjects,
+  type ChatArtifact,
+  type ChatCitation,
+  type SubjectSummary,
+} from "./api/client";
 import { ReviewChat } from "./components/ReviewChat";
 import { RightPanel } from "./components/RightPanel";
 import { SubjectSidebar } from "./components/SubjectSidebar";
@@ -15,9 +22,22 @@ export function App() {
   const [selectedSlug, setSelectedSlug] = useState(fallbackSubjects[0].slug);
   const [latestCitations, setLatestCitations] = useState<ChatCitation[]>([]);
   const [latestArtifacts, setLatestArtifacts] = useState<ChatArtifact[]>([]);
+  const [backendReady, setBackendReady] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
+
+    healthCheck()
+      .then((ok) => {
+        if (isMounted) {
+          setBackendReady(ok);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setBackendReady(false);
+        }
+      });
 
     listSubjects()
       .then((loadedSubjects) => {
@@ -70,6 +90,7 @@ export function App() {
   return (
     <main className="shell">
       <SubjectSidebar
+        backendReady={backendReady}
         subjects={subjects}
         selectedSlug={selectedSubject.slug}
         onCreateSubject={handleCreateSubject}

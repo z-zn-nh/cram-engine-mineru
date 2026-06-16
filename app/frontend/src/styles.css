@@ -59,6 +59,30 @@ input {
   font-weight: 700;
 }
 
+.backend-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: #7a8797;
+  font-size: 12px;
+}
+
+.backend-status span {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #c7d0dc;
+}
+
+.backend-status.ready {
+  color: #2c6f4f;
+}
+
+.backend-status.ready span {
+  background: #2fb36d;
+}
+
 .new-subject,
 .upload-button,
 .composer button {
