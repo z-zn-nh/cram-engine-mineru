@@ -7,6 +7,10 @@ description: Use when the user uploads course PDF, PPT/PPTX, images, or notes an
 
 This is the OpenCode skill wrapper for the local `cram-engine-mineru` fork.
 
+## Desktop App First
+
+桌面 App 是本 fork 的主体验：左侧学科文件夹管理不同课程，中间对话复习，右侧展示引用资料和产出结果。OpenCode 入口仍可辅助处理资料，但可复用产出必须写入对应学科文件夹，不能只停留在对话文本里。
+
 ## Trigger
 
 Use when the user uploads course files and types:

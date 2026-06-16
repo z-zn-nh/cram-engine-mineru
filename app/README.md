@@ -6,6 +6,10 @@ Codex-like desktop app for the 期末速成 engine.
 - `backend/`: Python FastAPI backend
 - `tauri/`: desktop shell
 
+## 产品形态
+
+这是期末速成引擎的桌面工作台，不是通用知识库。界面采用类似 Codex 的三栏结构：左侧学科文件夹管理不同课程资料，中间用于和大模型对话复习，右侧引用资料和产出结果会直接展示并可预览。生成的速成计划、笔记、思维导图、题库、错题本、考前总结都必须保存到当前学科文件夹下。
+
 ## 开发运行（dev）
 
 桌面 App 默认连接 `http://127.0.0.1:8000` 的 FastAPI 后端。开发阶段可以手动启动后端；打包/桌面联调时可以先构建 sidecar，让 Tauri 自动拉起后端。
@@ -39,8 +43,6 @@ cd app\frontend
 npm install
 npm run dev
 ```
-
-打开 http://127.0.0.1:1420 。
 
 打开 http://127.0.0.1:1420 。
 

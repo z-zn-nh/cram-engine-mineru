@@ -23,6 +23,10 @@ The user may also provide exam types or teacher-emphasized topics in the same me
 5. Store user data under `~/.cram-engine/`.
 6. Read `stages/stage0-ingest.md` before material ingestion, then continue with stages 1-4.
 
+## Desktop App Direction
+
+桌面 App 是本 fork 的主体验：左侧学科文件夹对应不同课程，中间对话复习，右侧展示引用资料和产出结果。Agent 入口仍可用，但当 `app/` 桌面工程存在时，应优先把可复用输出写入当前学科文件夹，而不是只留在聊天文本里。产出结果包括速成计划、笔记、思维导图、题库、错题本、考前总结。
+
 ## Useful Commands
 
 Check parsing environment:
