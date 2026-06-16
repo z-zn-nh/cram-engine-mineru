@@ -38,3 +38,5 @@ app/backend/build/
 app/backend/dist/
 app/backend/*.spec.tmp
 app/tauri/src-tauri/binaries/*.exe
+app/tauri/src-tauri/target/
+app/tauri/src-tauri/gen/

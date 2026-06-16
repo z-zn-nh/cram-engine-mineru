@@ -12,6 +12,12 @@ class AppStructureTests(unittest.TestCase):
         self.assertTrue((ROOT / "app" / "backend").is_dir())
         self.assertTrue((ROOT / "app" / "tauri").is_dir())
 
+    def test_tauri_windows_icon_exists(self):
+        icon = ROOT / "app" / "tauri" / "src-tauri" / "icons" / "icon.ico"
+
+        self.assertTrue(icon.is_file())
+        self.assertGreater(icon.stat().st_size, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
