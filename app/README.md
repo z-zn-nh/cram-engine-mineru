@@ -1,71 +1,53 @@
-# cram-engine-mineru desktop app
+# cram-engine-mineru app
 
-Codex-like desktop app for the 期末速成 engine.
+当前主线是 OpenCode 风格 TUI，不是桌面 GUI。
 
-- `frontend/`: React UI
-- `backend/`: Python FastAPI backend
-- `tauri/`: desktop shell
+- `backend/`: Python 后端、TUI、命令路由、长期记忆和输出管理
+- `frontend/`: 早期浏览器 GUI 尝试，暂时保留但不是主入口
+- `tauri/`: 早期桌面壳尝试，暂时保留但不是主入口
 
-## 产品形态
+## TUI 运行方式
 
-这是期末速成引擎的桌面工作台，不是通用知识库。界面采用类似 Codex 的三栏结构：左侧学科文件夹管理不同课程资料，中间用于和大模型对话复习，右侧引用资料和产出结果会直接展示并可预览。生成的速成计划、笔记、思维导图、题库、错题本、考前总结都必须保存到当前学科文件夹下。
-
-## 开发运行（dev）
-
-桌面 App 默认连接 `http://127.0.0.1:8000` 的 FastAPI 后端。开发阶段可以手动启动后端；打包/桌面联调时可以先构建 sidecar，让 Tauri 自动拉起后端。
-
-### 1. 启动后端
+在课程资料文件夹里启动：
 
 ```powershell
-cd app\backend
-pip install -r requirements.txt
-python -m uvicorn main:app --host 127.0.0.1 --port 8000
+cd D:\期末资料\通信原理
+python D:\cram-engine\app\backend\cram.py
 ```
 
-### 2. 配置大模型（OpenAI 兼容）
-
-后端按 OpenAI 兼容协议调用 `POST {base_url}/chat/completions`，密钥只从环境变量读取，不会写进任何产物文件。
-
-```powershell
-setx CRAM_LLM_API_KEY "你的密钥"        # 必填
-setx CRAM_LLM_BASE_URL "https://api.openai.com/v1"   # 可选，默认 OpenAI
-setx CRAM_LLM_MODEL "gpt-4o-mini"        # 可选
-```
-
-`setx` 设置后需要重开终端。也可以在 `%APPDATA%\cram-engine-mineru\settings.json` 写入 `provider/base_url/model`（密钥仍走环境变量）。未配置密钥时，`/chat` 会返回 503 并提示缺少 `CRAM_LLM_API_KEY`。
-
-### 3. 启动前端（浏览器调试）
-
-前端默认访问 `http://127.0.0.1:8000`，如果要换后端地址，设置 `VITE_CRAM_BACKEND_URL`。
-
-```powershell
-cd app\frontend
-npm install
-npm run dev
-```
-
-打开 http://127.0.0.1:1420 。
-
-### 4. 构建后端 sidecar（桌面壳使用）
-
-```powershell
-cd app\backend
-pip install -r requirements.txt
-powershell -ExecutionPolicy Bypass -File .\build-sidecar.ps1
-```
-
-生成位置：
+当前文件夹就是学科工作区。TUI 会自动创建：
 
 ```text
-app\tauri\src-tauri\binaries\cram-backend-x86_64-pc-windows-msvc.exe
+.cram/          # 长期记忆、会话、索引、缓存
+cram-output/    # 速成计划、笔记、思维导图、题库、考前总结
 ```
 
-### 5. 启动桌面窗口
+## 工作流
+
+1. 把 PDF、PPT/PPTX、图片、md/txt 笔记放进当前文件夹
+2. 启动 OpenCode 风格 TUI
+3. 输入 `/ingest` 扫描资料
+4. 直接对话复习，或使用 `/plan`、`/notes`、`/mindmap`、`/quiz`、`/summary`
+5. 使用 `/lint` 检查长期记忆、输出产物和引用之间的冲突
+
+输出内容会写入 `cram-output/`，并在后续会话中作为低优先级引用。每次打开 Agent 都会读取 `.cram/` 中的长期记忆和上次会话。
+
+## 模型配置
+
+后端按 OpenAI-compatible 协议调用模型：
 
 ```powershell
-cd app\tauri
-npm install
-npm run tauri dev
+setx CRAM_LLM_API_KEY "你的密钥"
+setx CRAM_LLM_BASE_URL "https://api.openai.com/v1"
+setx CRAM_LLM_MODEL "gpt-4o-mini"
 ```
 
-如果已经执行步骤 4，Tauri 会尝试自动启动 sidecar；如果没有构建 sidecar，就先按步骤 1 手动启动后端。
+`CRAM_LLM_API_KEY` 必填，`BASE_URL` 和 `MODEL` 可换成第三方兼容服务。
+
+## 开发验证
+
+```powershell
+cd D:\cram-engine
+pip install -r app\backend\requirements.txt
+python -m unittest discover -s tests -v
+```

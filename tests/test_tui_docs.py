@@ -5,25 +5,23 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class DesktopAppDocsTests(unittest.TestCase):
-    def test_app_readme_documents_tui_as_primary_workflow(self):
-        readme = (ROOT / "app" / "README.md").read_text(encoding="utf-8")
+class TuiDocsTests(unittest.TestCase):
+    def test_readme_documents_tui_as_primary_workflow(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("OpenCode 风格 TUI", readme)
-        self.assertIn("不是桌面 GUI", readme)
         self.assertIn("当前文件夹就是学科工作区", readme)
         self.assertIn(".cram", readme)
         self.assertIn("cram-output", readme)
+        self.assertIn("输出内容也会作为低优先级引用", readme)
         self.assertIn("/lint", readme)
 
-    def test_agent_docs_prefer_tui_folder_workspace(self):
+    def test_agent_docs_no_longer_present_gui_as_primary_path(self):
+        app_readme = (ROOT / "app" / "README.md").read_text(encoding="utf-8")
         agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
         skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
-        opencode = (ROOT / ".opencode" / "skills" / "cram-engine-mineru" / "SKILL.md").read_text(
-            encoding="utf-8"
-        )
 
-        for document in (agents, skill, opencode):
+        for document in (app_readme, agents, skill):
             self.assertIn("OpenCode 风格 TUI", document)
             self.assertIn("当前文件夹", document)
             self.assertIn("长期记忆", document)

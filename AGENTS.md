@@ -1,48 +1,63 @@
 # cram-engine-mineru Agent Instructions
 
-This repository is the user's local fork of `cram-engine`. It is not the upstream install flow.
+This repository is the user's local fork of `cram-engine`. The primary product direction is now an OpenCode 风格 TUI that runs inside a course folder.
 
-不要使用原作者的安装方式或启动方式作为本 fork 的主流程。
+## Primary Product Shape
 
-## Primary Trigger
-
-Use this workflow when the user uploads PDF, PPT/PPTX, image, txt, or md course materials and says:
-
-```text
-期末速成：<课程名>
-```
-
-The user may also provide exam types or teacher-emphasized topics in the same message.
+- 当前文件夹就是学科工作区，不再把学科抽象成远端数据库或 GUI 左栏。
+- `.cram/` stores 长期记忆, session logs, parsed data, indexes, cache, and conflict records.
+- `cram-output/` stores user-facing reusable artifacts.
+- 输出内容也会作为低优先级引用，原始资料永远优先于生成产物。
+- 每次打开 Agent must preserve previous memory by reading `.cram/memory/` and `.cram/sessions/`.
+- The first interface should feel like an OpenCode-style full-screen terminal agent: status bar, conversation stream, bottom input, slash commands.
 
 ## Required Behavior
 
-1. Do not use the upstream `/cram <course> start` flow as the primary entry.
-2. Do not use the upstream `npx skills add https://github.com/liuliu667/cram-engine` install command.
-3. Prefer uploaded files first. If no files are available, ask once for a local folder path.
-4. Run `scripts/ingest_materials.py` with MinerU before building the knowledge tree.
-5. Store user data under `~/.cram-engine/`.
-6. Read `stages/stage0-ingest.md` before material ingestion, then continue with stages 1-4.
+1. Do not present the old GUI/Tauri app as the primary workflow.
+2. Do not use AnythingLLM as the base unless the user explicitly reopens that direction.
+3. Do not use upstream `/cram <course> start` as the main flow.
+4. Prefer the current working directory as the course folder.
+5. Write reusable outputs to `cram-output/`.
+6. Keep machine state under `.cram/`.
+7. Treat output files as references, but lower priority than raw PDF/PPT/images/user notes.
+8. When evidence is missing from raw material, say that the source is generated memory/output rather than raw course material.
+9. Use `/lint` or equivalent checks to identify conflicts between raw sources, memory, and generated outputs.
 
-## Desktop App Direction
+## TUI Commands
 
-桌面 App 是本 fork 的主体验：左侧学科文件夹对应不同课程，中间对话复习，右侧展示引用资料和产出结果。Agent 入口仍可用，但当 `app/` 桌面工程存在时，应优先把可复用输出写入当前学科文件夹，而不是只留在聊天文本里。产出结果包括速成计划、笔记、思维导图、题库、错题本、考前总结。
+The expected first-pass TUI commands are:
 
-## Useful Commands
-
-Check parsing environment:
-
-```powershell
-py -3.13 scripts\ingest_materials.py --course "测试课程" --check-env
+```text
+/help
+/status
+/ingest
+/plan
+/notes
+/mindmap
+/quiz
+/summary
+/lint
 ```
 
-Dry-run material ingestion:
+Free-form text is a study question and should be answered with source-grounded citations whenever possible.
+
+## Development Notes
+
+Install backend dependencies:
 
 ```powershell
-py -3.13 scripts\ingest_materials.py --course "课程名" --dry-run "D:\课程资料"
+pip install -r app\backend\requirements.txt
 ```
 
-Install this fork as a local skill:
+Run tests:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\install-skill.ps1
+python -m unittest discover -s tests -v
+```
+
+Run TUI from a course folder:
+
+```powershell
+cd D:\期末资料\通信原理
+python D:\cram-engine\app\backend\cram.py
 ```

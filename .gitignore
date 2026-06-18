@@ -33,6 +33,10 @@ node_modules/
 dist/
 *.tsbuildinfo
 
+# TUI course workspace runtime data
+.cram/
+cram-output/
+
 # Desktop sidecar build output
 app/backend/build/
 app/backend/dist/
