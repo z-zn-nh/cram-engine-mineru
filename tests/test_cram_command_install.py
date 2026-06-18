@@ -15,6 +15,8 @@ class CramCommandInstallTests(unittest.TestCase):
         self.assertIn("cram.cmd", content)
         self.assertIn("app\\backend\\cram.py", content)
         self.assertIn("PATH", content)
+        self.assertIn("WindowsApps", content)
+        self.assertIn("command_locations", content)
 
     def test_command_shim_template_points_to_backend_entrypoint(self):
         template = ROOT / "scripts" / "cram.cmd.template"
@@ -36,6 +38,7 @@ class CramCommandInstallTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("install-cram-command.ps1", readme)
+        self.assertIn("WindowsApps", readme)
         self.assertIn("重开终端", readme)
         self.assertIn("cd D:\\期末资料\\通信原理", readme)
         self.assertIn("\ncram\n", readme)

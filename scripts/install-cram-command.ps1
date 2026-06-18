@@ -16,12 +16,22 @@ if (-not (Test-Path -LiteralPath $templatePath)) {
     throw "Cannot find command template: $templatePath"
 }
 
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-
-$cmdPath = Join-Path $InstallDir "cram.cmd"
 $template = Get-Content -Raw -LiteralPath $templatePath
 $content = $template.Replace("@CRAM_PY@", $cramPy).Replace("@PYTHON@", $Python)
-[System.IO.File]::WriteAllText($cmdPath, $content, [System.Text.UTF8Encoding]::new($false))
+
+$windowsAppsDir = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"
+$command_locations = @($InstallDir)
+if (Test-Path -LiteralPath $windowsAppsDir) {
+    $command_locations += $windowsAppsDir
+}
+
+$installedPaths = @()
+foreach ($location in $command_locations) {
+    New-Item -ItemType Directory -Force -Path $location | Out-Null
+    $cmdPath = Join-Path $location "cram.cmd"
+    [System.IO.File]::WriteAllText($cmdPath, $content, [System.Text.UTF8Encoding]::new($false))
+    $installedPaths += $cmdPath
+}
 
 $currentUserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 $pathParts = @()
@@ -38,5 +48,7 @@ if (-not $alreadyOnPath) {
     [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
 }
 
-Write-Host "Installed cram command: $cmdPath"
-Write-Host "If this is your first install, reopen cmd/PowerShell before running: cram"
+Write-Host "Installed cram command:"
+$installedPaths | ForEach-Object { Write-Host "  $_" }
+Write-Host "Try: cram --status"
+Write-Host "If cmd still cannot find cram, reopen Windows Terminal or run: refreshenv"

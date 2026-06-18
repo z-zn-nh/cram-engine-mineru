@@ -99,6 +99,8 @@ cd D:\cram-engine
 powershell -ExecutionPolicy Bypass -File scripts\install-cram-command.ps1
 ```
 
+安装器会同时写入 `C:\Users\<你>\.cram-engine-mineru\bin\cram.cmd` 和 `C:\Users\<你>\AppData\Local\Microsoft\WindowsApps\cram.cmd`。后者通常已经在 Windows 的 PATH 里，可以避免新装命令后当前终端仍然找不到 `cram`。
+
 第一次安装后需要重开终端。之后可以在任意课程资料文件夹里运行：
 
 ```powershell
