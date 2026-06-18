@@ -40,10 +40,19 @@ class TuiAppContractTests(unittest.TestCase):
         module = importlib.import_module("app.backend.cram_app.tui")
         css = module.CramTuiApp.CSS
 
-        self.assertIn("#0b0f14", css)
-        self.assertIn("height: 1", css)
-        self.assertIn("border-top", css)
+        self.assertIn("#0a0a0a", css)
+        self.assertIn("#1e1e1e", css)
+        self.assertIn("border-left", css)
+        self.assertIn("#hints", css)
         self.assertNotIn("background: #0f172a", css)
+
+    def test_tui_uses_custom_prompt_chrome_instead_of_textual_footer(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+        source = (ROOT / "app" / "backend" / "cram_app" / "tui.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("Footer", source)
+        self.assertIn('id="hints"', source)
+        self.assertIn("ctrl+p commands", module.CramTuiApp()._hint_text())
 
 
 if __name__ == "__main__":
