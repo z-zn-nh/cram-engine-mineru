@@ -1,0 +1,3 @@
+@echo off
+set "CRAM_PY=@CRAM_PY@"
+@PYTHON@ "%CRAM_PY%" %*

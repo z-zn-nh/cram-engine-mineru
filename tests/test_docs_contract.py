@@ -11,7 +11,9 @@ class DocsContractTests(unittest.TestCase):
 
         self.assertIn("OpenCode 风格 TUI", readme)
         self.assertIn("当前文件夹就是学科工作区", readme)
-        self.assertIn("python D:\\cram-engine\\app\\backend\\cram.py", readme)
+        self.assertIn("scripts\\install-cram-command.ps1", readme)
+        self.assertIn("cram --status", readme)
+        self.assertIn("cram", readme)
         self.assertIn(".cram", readme)
         self.assertIn("cram-output", readme)
         self.assertIn("z-zn-nh/cram-engine-mineru", readme)
