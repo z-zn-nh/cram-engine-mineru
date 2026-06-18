@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
+from textual.containers import Center, Middle, Vertical
 from textual.widgets import Input, RichLog, Static
 
 from .commands import CommandRouter
@@ -31,6 +31,28 @@ class CramTuiApp(App):
         padding: 1 3 0 3;
         background: #141414;
         color: #eeeeee;
+    }
+
+    #home {
+        height: 1fr;
+        padding: 0 2;
+        background: #141414;
+        color: #eeeeee;
+    }
+
+    #home-card {
+        width: 78;
+        height: auto;
+        padding: 1 2;
+    }
+
+    #session {
+        height: 1fr;
+        background: #141414;
+    }
+
+    .hidden {
+        display: none;
     }
 
     #prompt {
@@ -70,18 +92,20 @@ class CramTuiApp(App):
         self.memory = MemoryStore.open(self.workspace)
         self.title = f"cram - {self.workspace.root}"
         self.sub_title = self.workspace.course_name
+        self._session_started = False
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status")
-        with Vertical():
+        with Middle(id="home"):
+            with Center():
+                yield Static(self._home_text(), id="home-card")
+        with Vertical(id="session", classes="hidden"):
             yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
         yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="prompt")
         yield Static(self._hint_text(), id="hints")
 
     def on_mount(self) -> None:
         chat = self.query_one("#chat", RichLog)
-        chat.write("[bold #fab283]cram[/bold #fab283] [#808080]course agent[/#808080]")
-        chat.write(f"[#808080]workspace[/#808080] {self.workspace.root}")
         boot_summary = self.memory.load_boot_summary().strip()
         if boot_summary:
             chat.write("[bold #5c9cf5]memory[/bold #5c9cf5]")
@@ -96,6 +120,7 @@ class CramTuiApp(App):
         if not text:
             return
 
+        self._enter_session()
         chat = self.query_one("#chat", RichLog)
         chat.write(f"\n[bold #7fd88f]you[/bold #7fd88f]\n{text}")
         result = self.router.handle(text)
@@ -109,6 +134,16 @@ class CramTuiApp(App):
     def action_clear_chat(self) -> None:
         self.query_one("#chat", RichLog).clear()
 
+    def _enter_session(self) -> None:
+        if self._session_started:
+            return
+        self._session_started = True
+        self.query_one("#home").add_class("hidden")
+        self.query_one("#session").remove_class("hidden")
+        chat = self.query_one("#chat", RichLog)
+        chat.write("[bold #fab283]cram[/bold #fab283] [#808080]session[/#808080]")
+        chat.write(f"[#808080]workspace[/#808080] {self.workspace.root}")
+
     def _status_text(self) -> str:
         source_count = len(discover_workspace_sources(self.workspace.root))
         output_count = len([path for path in self.workspace.output_dir.rglob("*") if path.is_file()])
@@ -119,6 +154,18 @@ class CramTuiApp(App):
 
     def _hint_text(self) -> str:
         return "^l clear    ctrl+p commands    /help shortcuts    /status workspace"
+
+    def _logo_text(self) -> str:
+        return "CRAM"
+
+    def _home_text(self) -> str:
+        return (
+            "[bold #fab283]CRAM[/bold #fab283] [#808080]course agent[/#808080]\n\n"
+            f"[#808080]workspace[/#808080] {self.workspace.root}\n"
+            f"[#808080]course[/#808080] {self.workspace.course_name}\n\n"
+            "[#eeeeee]Drop PDFs, PPTX, notes, and images into this folder.[/#eeeeee]\n"
+            "[#808080]Then ask a question, or start with[/#808080] [bold #fab283]/ingest[/bold #fab283]"
+        )
 
 
 def run_tui(workspace_path: Path | str = ".") -> None:

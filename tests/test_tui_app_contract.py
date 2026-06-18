@@ -54,6 +54,17 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn('id="hints"', source)
         self.assertIn("ctrl+p commands", module.CramTuiApp()._hint_text())
 
+    def test_tui_uses_opencode_home_then_session_mode(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+        source = (ROOT / "app" / "backend" / "cram_app" / "tui.py").read_text(encoding="utf-8")
+        app = module.CramTuiApp()
+
+        self.assertIn('id="home"', source)
+        self.assertIn('id="session"', source)
+        self.assertIn("_enter_session", source)
+        self.assertIn("CRAM", app._logo_text())
+        self.assertIn(str(app.workspace.root), app._home_text())
+
 
 if __name__ == "__main__":
     unittest.main()
