@@ -78,8 +78,9 @@ class TuiCommandTests(unittest.TestCase):
     def test_free_text_reports_missing_llm_api_key_without_crashing(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp))
+            config_path = Path(tmp) / "missing-llm.json"
 
-            with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
                 result = CommandRouter(workspace).handle("帮我讲一下采样定理")
 
             self.assertEqual(result.kind, "ask")

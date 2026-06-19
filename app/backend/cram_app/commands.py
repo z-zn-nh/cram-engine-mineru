@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .llm import LLMClient, LLMConfigurationError, LLMRequestError, OpenAICompatibleClient
 from .memory import MemoryStore
-from .settings import LLMSettings
+from .settings import LLMSettings, load_user_llm_config
 from .workspace import CramWorkspace, discover_workspace_sources
 
 
@@ -44,7 +44,7 @@ class CommandRouter:
     def __init__(self, workspace: CramWorkspace, *, llm: LLMClient | None = None):
         self.workspace = workspace
         self.memory = MemoryStore.open(workspace)
-        self.llm = llm or OpenAICompatibleClient(_llm_settings_from_env())
+        self.llm = llm or _default_llm_client()
 
     def handle(self, text: str) -> CommandResult:
         message = text.strip()
@@ -169,6 +169,20 @@ class CommandRouter:
                 f"{conflict_lines}"
             ),
         )
+
+
+def _default_llm_client() -> LLMClient:
+    config = load_user_llm_config()
+    if config:
+        return OpenAICompatibleClient(
+            LLMSettings(
+                provider="openai-compatible",
+                base_url=config.base_url,
+                model=config.model,
+            ),
+            api_key=config.api_key,
+        )
+    return OpenAICompatibleClient(_llm_settings_from_env())
 
 
 def _llm_settings_from_env() -> LLMSettings:

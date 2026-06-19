@@ -1,8 +1,12 @@
 import importlib
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+from textual.widgets import Input
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +70,58 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("CRAM", app._logo_text())
         self.assertIn(str(app.workspace.root), app._home_text())
 
+    def test_tui_starts_on_centered_llm_setup_when_config_is_missing(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def inspect_setup():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        return (
+                            app.query_one("#llm-setup").display,
+                            app.query_one("#home").display,
+                            app.query_one("#setup-api-key").has_focus,
+                        )
+
+        setup_display, home_display, api_key_focus = asyncio.run(inspect_setup())
+
+        self.assertTrue(setup_display)
+        self.assertFalse(home_display)
+        self.assertTrue(api_key_focus)
+
+    def test_tui_saves_llm_setup_and_enters_home(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def save_setup():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        app.query_one("#setup-api-key", Input).value = "secret"
+                        app.query_one("#setup-base-url", Input).value = "https://api.example.com/v1"
+                        app.query_one("#setup-model", Input).value = "test-model"
+                        app._save_llm_setup()
+                        await pilot.pause()
+                        payload = json.loads(config_path.read_text(encoding="utf-8"))
+                        return (
+                            app.query_one("#llm-setup").display,
+                            app.query_one("#home").display,
+                            app.query_one("#home-prompt").has_focus,
+                            payload,
+                        )
+
+        setup_display, home_display, home_focus, payload = asyncio.run(save_setup())
+
+        self.assertFalse(setup_display)
+        self.assertTrue(home_display)
+        self.assertTrue(home_focus)
+        self.assertEqual(payload["api_key"], "secret")
+        self.assertEqual(payload["model"], "test-model")
+
     def test_home_prompt_is_centered_not_docked_to_terminal_bottom(self):
         module = importlib.import_module("app.backend.cram_app.tui")
         source = (ROOT / "app" / "backend" / "cram_app" / "tui.py").read_text(encoding="utf-8")
@@ -96,13 +152,25 @@ class TuiAppContractTests(unittest.TestCase):
 
         async def inspect_layout(size):
             with tempfile.TemporaryDirectory() as tmp:
-                app = module.CramTuiApp(tmp)
-                async with app.run_test(size=size) as pilot:
-                    await pilot.press("h", "i", "enter")
-                    await pilot.pause()
-                    prompt = app.query_one("#session-prompt")
-                    hints = app.query_one("#hints")
-                    return prompt.region, hints.region
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "api_key": "secret",
+                            "base_url": "https://api.example.com/v1",
+                            "model": "test-model",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(tmp)
+                    async with app.run_test(size=size) as pilot:
+                        await pilot.press("/", "s", "t", "a", "t", "u", "s", "enter")
+                        await pilot.pause()
+                        prompt = app.query_one("#session-prompt")
+                        hints = app.query_one("#hints")
+                        return prompt.region, hints.region
 
         for size in [(80, 24), (100, 30), (120, 40)]:
             with self.subTest(size=size):

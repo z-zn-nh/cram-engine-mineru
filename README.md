@@ -114,7 +114,13 @@ cram
 cram --status
 ```
 
-配置 OpenAI-compatible 模型：
+首次使用会先进入 TUI 内的 LLM 配置页。输入 API key、Base URL 和模型名，保存后会进入复习页面。配置保存在用户目录：
+
+```text
+C:\Users\<你>\.cram-engine-mineru\llm.json
+```
+
+也可以继续用环境变量作为备用配置：
 
 ```powershell
 setx CRAM_LLM_API_KEY "你的密钥"
@@ -122,7 +128,7 @@ setx CRAM_LLM_BASE_URL "https://api.openai.com/v1"
 setx CRAM_LLM_MODEL "gpt-4o-mini"
 ```
 
-`setx` 后需要重新打开终端。
+`setx` 后需要重新打开终端。若同时存在 TUI 配置文件和环境变量，TUI 配置文件优先。
 
 ## MinerU
 

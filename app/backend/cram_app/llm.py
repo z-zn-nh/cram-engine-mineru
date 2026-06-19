@@ -27,14 +27,18 @@ class OpenAICompatibleClient:
         settings: LLMSettings,
         *,
         http_client: httpx.Client | None = None,
+        api_key: str | None = None,
         timeout: float = 60.0,
     ):
         self.settings = settings
         self._http_client = http_client
+        self._api_key = api_key
         self.timeout = timeout
 
     @property
     def api_key(self) -> str:
+        if self._api_key:
+            return self._api_key
         value = os.environ.get(self.settings.api_key_env)
         if not value:
             raise LLMConfigurationError(
