@@ -17,6 +17,13 @@ class FakeLLM:
         return self.answer
 
 
+class FakeStreamingLLM(FakeLLM):
+    def stream_chat(self, messages: list[dict]):
+        self.messages = messages
+        yield "采样"
+        yield "定理"
+
+
 class TuiCommandTests(unittest.TestCase):
     def test_status_reports_current_folder_sources_and_outputs(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -40,7 +47,16 @@ class TuiCommandTests(unittest.TestCase):
             self.assertEqual(result.kind, "help")
             self.assertIn("/ingest", result.message)
             self.assertIn("/config", result.message)
+            self.assertIn("/model", result.message)
             self.assertIn("/lint", result.message)
+
+    def test_model_command_routes_to_model_picker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+
+            result = CommandRouter(workspace).handle("/model")
+
+            self.assertEqual(result.kind, "model")
 
     def test_generation_command_writes_output_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -75,6 +91,19 @@ class TuiCommandTests(unittest.TestCase):
             self.assertEqual(result.message, "采样定理是把连续信号离散化的基础。")
             self.assertIn("期末速成", llm.messages[0]["content"])
             self.assertEqual(llm.messages[-1]["content"], "帮我讲一下采样定理")
+
+    def test_free_text_can_stream_llm_chunks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            llm = FakeStreamingLLM()
+            router = CommandRouter(workspace, llm=llm)
+
+            chunks = list(router.stream("帮我讲一下采样定理"))
+
+            self.assertEqual(chunks, ["采样", "定理"])
+            events = router.memory.load_recent_session_events()
+            self.assertEqual(events[-1]["role"], "agent")
+            self.assertEqual(events[-1]["content"], "采样定理")
 
     def test_free_text_reports_missing_llm_api_key_without_crashing(self):
         with tempfile.TemporaryDirectory() as tmp:

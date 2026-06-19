@@ -2,11 +2,14 @@ import importlib
 import asyncio
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from textual.widgets import Input
+
+from app.backend.cram_app.commands import CommandResult
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -70,6 +73,48 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("CRAM", app._logo_text())
         self.assertIn(str(app.workspace.root), app._home_text())
 
+    def test_tui_chat_uses_selectable_updatable_message_widgets(self):
+        source = (ROOT / "app" / "backend" / "cram_app" / "tui.py").read_text(encoding="utf-8")
+
+        self.assertIn("VerticalScroll", source)
+        self.assertNotIn("RichLog", source)
+        self.assertIn("_run_prompt_worker", source)
+
+    def test_tui_shows_user_message_before_slow_agent_finishes(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        class SlowRouter:
+            def handle(self, text):
+                time.sleep(0.5)
+                return CommandResult(kind="ask", message="slow answer")
+
+        async def submit_prompt():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "api_key": "secret",
+                            "base_url": "https://api.example.com/v1",
+                            "model": "test-model",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    app.router = SlowRouter()
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.press("h", "i", "enter")
+                        await pilot.pause(0.1)
+                        return [node.content for node in app.query("#chat .message-body")]
+
+        renderables = asyncio.run(submit_prompt())
+        joined = "\n".join(str(item) for item in renderables)
+
+        self.assertIn("hi", joined)
+        self.assertIn("thinking", joined)
+
     def test_tui_starts_on_centered_llm_setup_when_config_is_missing(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 
@@ -117,6 +162,38 @@ class TuiAppContractTests(unittest.TestCase):
 
         self.assertTrue(setup_display)
         self.assertFalse(home_display)
+
+    def test_tui_shows_setup_when_only_env_config_is_present(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def inspect_setup():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "missing.json"
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "CRAM_LLM_CONFIG_PATH": str(config_path),
+                        "CRAM_LLM_API_KEY": "secret",
+                        "CRAM_LLM_BASE_URL": "https://api.example.com/v1",
+                        "CRAM_LLM_MODEL": "gpt-4o-mini",
+                    },
+                    clear=True,
+                ):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        return (
+                            app.query_one("#llm-setup").display,
+                            app.query_one("#home").display,
+                            app.query_one("#setup-base-url", Input).value,
+                        )
+
+        setup_display, home_display, base_url = asyncio.run(inspect_setup())
+
+        self.assertTrue(setup_display)
+        self.assertFalse(home_display)
+        # env vars must not leak into the form: cram's setup reads only its own llm.json
+        self.assertEqual(base_url, "https://api.openai.com/v1")
 
     def test_tui_saves_llm_setup_and_enters_home(self):
         module = importlib.import_module("app.backend.cram_app.tui")

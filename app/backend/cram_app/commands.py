@@ -28,6 +28,7 @@ HELP_TEXT = """可用命令：
 /summary  生成考前总结
 /lint     检查记忆、输出和引用冲突
 /config   重新配置 LLM
+/model    切换对话模型
 /help     查看命令
 
 直接输入问题即可继续复习对话。
@@ -63,6 +64,8 @@ class CommandRouter:
             return self._remember(self._lint())
         if command == "/config":
             return CommandResult(kind="config", message="")
+        if command == "/model":
+            return CommandResult(kind="model", message="")
         if command == "/ingest":
             return self._remember(self._ingest_status())
         if command in ARTIFACT_COMMANDS:
@@ -139,6 +142,35 @@ class CommandRouter:
                 f"{exc}"
             )
         return CommandResult(kind="ask", message=answer)
+
+    def stream(self, message: str):
+        self.memory.append_session_event("user", message)
+        if not hasattr(self.llm, "stream_chat"):
+            result = self._remember(self._ask_llm(message))
+            if result.message:
+                yield result.message
+            return
+
+        chunks: list[str] = []
+        try:
+            for chunk in self.llm.stream_chat(self._llm_messages(message)):
+                chunks.append(chunk)
+                yield chunk
+        except LLMConfigurationError as exc:
+            message_text = _llm_setup_message(exc)
+            self.memory.append_session_event("agent", message_text)
+            yield message_text
+        except LLMRequestError as exc:
+            message_text = (
+                "LLM 请求失败，当前会话已保留。请检查模型服务地址、模型名和网络状态。\n"
+                f"{exc}"
+            )
+            self.memory.append_session_event("agent", message_text)
+            yield message_text
+        else:
+            answer = "".join(chunks)
+            if answer:
+                self.memory.append_session_event("agent", answer)
 
     def _llm_messages(self, message: str) -> list[dict]:
         system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent。
