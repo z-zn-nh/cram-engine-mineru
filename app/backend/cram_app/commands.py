@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .llm import LLMClient, LLMConfigurationError, LLMRequestError, OpenAICompatibleClient
 from .memory import MemoryStore
+from .settings import LLMSettings
 from .workspace import CramWorkspace, discover_workspace_sources
 
 
@@ -38,9 +41,10 @@ class CommandResult:
 
 
 class CommandRouter:
-    def __init__(self, workspace: CramWorkspace):
+    def __init__(self, workspace: CramWorkspace, *, llm: LLMClient | None = None):
         self.workspace = workspace
         self.memory = MemoryStore.open(workspace)
+        self.llm = llm or OpenAICompatibleClient(_llm_settings_from_env())
 
     def handle(self, text: str) -> CommandResult:
         message = text.strip()
@@ -61,15 +65,7 @@ class CommandRouter:
         if command in ARTIFACT_COMMANDS:
             return self._remember(self._write_artifact(command))
 
-        return self._remember(
-            CommandResult(
-                kind="ask",
-                message=(
-                    f"我会围绕“{message}”检索当前文件夹资料和长期记忆。"
-                    "第一版 TUI 已记录这个问题，后续会接入资料检索和 LLM 回答。"
-                ),
-            )
-        )
+        return self._remember(self._ask_llm(message))
 
     def _remember(self, result: CommandResult) -> CommandResult:
         if result.message:
@@ -129,6 +125,34 @@ class CommandRouter:
             wrote=[output_path],
         )
 
+    def _ask_llm(self, message: str) -> CommandResult:
+        try:
+            answer = self.llm.chat(self._llm_messages(message), stream=False)
+        except LLMConfigurationError as exc:
+            answer = _llm_setup_message(exc)
+        except LLMRequestError as exc:
+            answer = (
+                "LLM 请求失败，当前会话已保留。请检查模型服务地址、模型名和网络状态。\n"
+                f"{exc}"
+            )
+        return CommandResult(kind="ask", message=answer)
+
+    def _llm_messages(self, message: str) -> list[dict]:
+        system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent。
+
+当前课程文件夹：{self.workspace.course_name}
+
+回答规则：
+- 先帮助用户理解概念、考点和易错点。
+- 用中文回答，结构清晰，适合考前快速复习。
+- 当前阶段还没有接入资料检索；如果需要引用课程资料，明确说明需要先运行 /ingest。
+- 不要编造不存在的资料来源或页码。
+"""
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
+        ]
+
     def _lint(self) -> CommandResult:
         conflicts = self.memory.load_conflicts()
         references = self.memory.build_reference_catalog()
@@ -145,6 +169,27 @@ class CommandRouter:
                 f"{conflict_lines}"
             ),
         )
+
+
+def _llm_settings_from_env() -> LLMSettings:
+    return LLMSettings(
+        provider="openai-compatible",
+        base_url=os.environ.get("CRAM_LLM_BASE_URL", "https://api.openai.com/v1"),
+        model=os.environ.get("CRAM_LLM_MODEL", "gpt-4o-mini"),
+        api_key_env=os.environ.get("CRAM_LLM_API_KEY_ENV", "CRAM_LLM_API_KEY"),
+    )
+
+
+def _llm_setup_message(error: Exception) -> str:
+    return (
+        "LLM 还没有配置好，当前问题已记录，但不会调用模型。\n\n"
+        f"{error}\n\n"
+        "在新终端里配置：\n"
+        'setx CRAM_LLM_API_KEY "你的密钥"\n'
+        'setx CRAM_LLM_BASE_URL "https://api.openai.com/v1"\n'
+        'setx CRAM_LLM_MODEL "gpt-4o-mini"\n\n'
+        "配置后重新打开终端，再进入学科资料文件夹运行 cram。"
+    )
 
 
 def main() -> int:

@@ -1,9 +1,20 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.backend.cram_app.commands import CommandRouter
 from app.backend.cram_app.workspace import CramWorkspace
+
+
+class FakeLLM:
+    def __init__(self, answer: str = "LLM 已回答"):
+        self.answer = answer
+        self.messages: list[dict] = []
+
+    def chat(self, messages: list[dict], *, stream: bool = False) -> str:
+        self.messages = messages
+        return self.answer
 
 
 class TuiCommandTests(unittest.TestCase):
@@ -55,11 +66,25 @@ class TuiCommandTests(unittest.TestCase):
     def test_free_text_is_routed_as_question(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp))
+            llm = FakeLLM("采样定理是把连续信号离散化的基础。")
 
-            result = CommandRouter(workspace).handle("帮我讲一下采样定理")
+            result = CommandRouter(workspace, llm=llm).handle("帮我讲一下采样定理")
 
             self.assertEqual(result.kind, "ask")
-            self.assertIn("采样定理", result.message)
+            self.assertEqual(result.message, "采样定理是把连续信号离散化的基础。")
+            self.assertIn("期末速成", llm.messages[0]["content"])
+            self.assertEqual(llm.messages[-1]["content"], "帮我讲一下采样定理")
+
+    def test_free_text_reports_missing_llm_api_key_without_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+
+            with patch.dict("os.environ", {}, clear=True):
+                result = CommandRouter(workspace).handle("帮我讲一下采样定理")
+
+            self.assertEqual(result.kind, "ask")
+            self.assertIn("CRAM_LLM_API_KEY", result.message)
+            self.assertIn("setx", result.message)
 
 
 if __name__ == "__main__":
