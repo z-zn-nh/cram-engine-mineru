@@ -60,16 +60,48 @@ class TuiCommandTests(unittest.TestCase):
 
             self.assertEqual(result.kind, "model")
 
-    def test_generation_command_writes_output_file(self):
+    def test_generation_command_writes_llm_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp) / "数字电路")
+            llm = FakeLLM("# 速成计划\n1. 先掌握布尔代数化简")
 
-            result = CommandRouter(workspace).handle("/plan")
+            result = CommandRouter(workspace, llm=llm).handle("/plan")
 
             self.assertEqual(result.kind, "artifact")
             self.assertEqual(result.wrote, [workspace.output_dir / "速成计划.md"])
-            self.assertTrue((workspace.output_dir / "速成计划.md").is_file())
-            self.assertIn("Wrote", result.message)
+            written = (workspace.output_dir / "速成计划.md").read_text(encoding="utf-8")
+            self.assertIn("先掌握布尔代数化简", written)  # real LLM content, not a placeholder
+            self.assertNotIn("后续会接入 LLM", written)
+            self.assertIn("期末速成计划", llm.messages[0]["content"])
+
+    def test_generation_command_passes_indexed_evidence_to_llm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            (workspace.root / "notes.md").write_text(
+                "Nyquist sampling theorem prevents aliasing.",
+                encoding="utf-8",
+            )
+            CommandRouter(workspace).handle("/ingest")
+            llm = FakeLLM("# 题库\nQ1. ...")
+
+            CommandRouter(workspace, llm=llm).handle("/quiz")
+
+            system_content = llm.messages[0]["content"]
+            self.assertIn("notes.md:text:1", system_content)
+            self.assertIn("Nyquist sampling theorem", system_content)
+
+    def test_generation_command_without_llm_config_does_not_write_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            config_path = Path(tmp) / "missing-llm.json"
+
+            with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                result = CommandRouter(workspace).handle("/plan")
+
+            self.assertEqual(result.kind, "artifact")
+            self.assertIn("CRAM_LLM_API_KEY", result.message)
+            self.assertEqual(result.wrote, [])
+            self.assertFalse((workspace.output_dir / "速成计划.md").exists())
 
     def test_lint_reports_existing_conflicts_and_reference_health(self):
         with tempfile.TemporaryDirectory() as tmp:
