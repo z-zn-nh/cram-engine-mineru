@@ -39,6 +39,7 @@ class TuiCommandTests(unittest.TestCase):
 
             self.assertEqual(result.kind, "help")
             self.assertIn("/ingest", result.message)
+            self.assertIn("/config", result.message)
             self.assertIn("/lint", result.message)
 
     def test_generation_command_writes_output_file(self):

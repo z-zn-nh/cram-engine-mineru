@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import os
 from pathlib import Path
 
 from textual.app import App, ComposeResult
@@ -9,7 +7,7 @@ from textual.widgets import Button, Input, RichLog, Static
 
 from .commands import CommandRouter
 from .memory import MemoryStore
-from .settings import UserLLMConfig, load_user_llm_config, save_user_llm_config
+from .settings import UserLLMConfig, load_effective_llm_config, normalize_base_url, save_user_llm_config
 from .workspace import CramWorkspace, discover_workspace_sources
 
 
@@ -161,12 +159,12 @@ class CramTuiApp(App):
                 yield Static(self._setup_text(), id="setup-card")
                 yield Input(placeholder="API key", password=True, id="setup-api-key", classes="setup-input")
                 yield Input(
-                    value="https://api.openai.com/v1",
+                    value=self._setup_base_url_default(),
                     placeholder="Base URL",
                     id="setup-base-url",
                     classes="setup-input",
                 )
-                yield Input(value="gpt-4o-mini", placeholder="Model", id="setup-model", classes="setup-input")
+                yield Input(value=self._setup_model_default(), placeholder="Model", id="setup-model", classes="setup-input")
                 yield Button("Save", id="setup-save")
                 yield Static("", id="setup-message")
         with Middle(id="home", classes="hidden" if self._needs_llm_setup else None):
@@ -207,10 +205,14 @@ class CramTuiApp(App):
         if not text:
             return
 
+        result = self.router.handle(text)
+        if result.kind == "config":
+            self._open_llm_setup()
+            return
+
         self._enter_session()
         chat = self.query_one("#chat", RichLog)
         chat.write(f"\n[bold #7fd88f]you[/bold #7fd88f]\n{text}")
-        result = self.router.handle(text)
         if result.message:
             chat.write(f"\n[bold #5c9cf5]agent[/bold #5c9cf5]\n{result.message}")
         if result.wrote:
@@ -218,14 +220,32 @@ class CramTuiApp(App):
             chat.write(f"\n[bold #f5a742]wrote[/bold #f5a742]\n{wrote}")
         self.query_one("#status", Static).update(self._status_text())
 
+    def _open_llm_setup(self) -> None:
+        config = load_effective_llm_config()
+        self.query_one("#setup-api-key", Input).value = config.api_key if config else ""
+        self.query_one("#setup-base-url", Input).value = config.base_url if config else "https://api.openai.com/v1"
+        self.query_one("#setup-model", Input).value = config.model if config else "gpt-4o-mini"
+        self.query_one("#setup-message", Static).update("")
+        self.query_one("#home").add_class("hidden")
+        self.query_one("#session").add_class("hidden")
+        self.query_one("#home-prompt").add_class("hidden")
+        self.query_one("#session-prompt").add_class("hidden")
+        self.query_one("#llm-setup").remove_class("hidden")
+        self.query_one("#setup-api-key", Input).focus()
+
     def _save_llm_setup(self) -> None:
         api_key = self.query_one("#setup-api-key", Input).value.strip()
-        base_url = self.query_one("#setup-base-url", Input).value.strip() or "https://api.openai.com/v1"
+        raw_base_url = self.query_one("#setup-base-url", Input).value.strip() or "https://api.openai.com/v1"
+        base_url = normalize_base_url(raw_base_url)
         model = self.query_one("#setup-model", Input).value.strip() or "gpt-4o-mini"
         message = self.query_one("#setup-message", Static)
         if not api_key:
             message.update("API key 不能为空")
             self.query_one("#setup-api-key", Input).focus()
+            return
+        if not base_url:
+            message.update("Base URL 必须以 http:// 或 https:// 开头")
+            self.query_one("#setup-base-url", Input).focus()
             return
 
         save_user_llm_config(UserLLMConfig(api_key=api_key, base_url=base_url, model=model))
@@ -282,9 +302,17 @@ class CramTuiApp(App):
             "[#808080]配置保存在用户目录，不写入当前课程文件夹。[/#808080]"
         )
 
+    def _setup_base_url_default(self) -> str:
+        config = load_effective_llm_config()
+        return config.base_url if config else "https://api.openai.com/v1"
+
+    def _setup_model_default(self) -> str:
+        config = load_effective_llm_config()
+        return config.model if config else "gpt-4o-mini"
+
 
 def _has_llm_config() -> bool:
-    return bool(os.environ.get("CRAM_LLM_API_KEY") or load_user_llm_config())
+    return bool(load_effective_llm_config())
 
 
 def run_tui(workspace_path: Path | str = ".") -> None:

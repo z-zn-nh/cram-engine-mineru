@@ -92,6 +92,32 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertFalse(home_display)
         self.assertTrue(api_key_focus)
 
+    def test_tui_starts_on_llm_setup_when_env_base_url_is_invalid(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def inspect_setup():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "missing.json"
+                with patch.dict(
+                    "os.environ",
+                    {
+                        "CRAM_LLM_CONFIG_PATH": str(config_path),
+                        "CRAM_LLM_API_KEY": "secret",
+                        "CRAM_LLM_BASE_URL": "api.example.com/v1",
+                        "CRAM_LLM_MODEL": "test-model",
+                    },
+                    clear=True,
+                ):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        return app.query_one("#llm-setup").display, app.query_one("#home").display
+
+        setup_display, home_display = asyncio.run(inspect_setup())
+
+        self.assertTrue(setup_display)
+        self.assertFalse(home_display)
+
     def test_tui_saves_llm_setup_and_enters_home(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 
@@ -121,6 +147,39 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertTrue(home_focus)
         self.assertEqual(payload["api_key"], "secret")
         self.assertEqual(payload["model"], "test-model")
+
+    def test_config_command_reopens_llm_setup(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def open_config():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "api_key": "secret",
+                            "base_url": "https://api.example.com/v1",
+                            "model": "test-model",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.press("/", "c", "o", "n", "f", "i", "g", "enter")
+                        await pilot.pause()
+                        return (
+                            app.query_one("#llm-setup").display,
+                            app.query_one("#session").display,
+                            app.query_one("#setup-base-url", Input).value,
+                        )
+
+        setup_display, session_display, base_url = asyncio.run(open_config())
+
+        self.assertTrue(setup_display)
+        self.assertFalse(session_display)
+        self.assertEqual(base_url, "https://api.example.com/v1")
 
     def test_home_prompt_is_centered_not_docked_to_terminal_bottom(self):
         module = importlib.import_module("app.backend.cram_app.tui")

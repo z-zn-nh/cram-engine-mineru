@@ -4,6 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 import os
 from pathlib import Path
+import re
 
 
 @dataclass(frozen=True)
@@ -58,11 +59,38 @@ def load_user_llm_config(path: Path | None = None) -> UserLLMConfig | None:
         return None
     payload = json.loads(target.read_text(encoding="utf-8"))
     api_key = str(payload.get("api_key", "")).strip()
-    if not api_key:
+    base_url = normalize_base_url(str(payload.get("base_url") or "https://api.openai.com/v1"))
+    model = str(payload.get("model") or "gpt-4o-mini").strip()
+    if not api_key or not base_url or not model:
         return None
     return UserLLMConfig(
         api_key=api_key,
-        base_url=str(payload.get("base_url") or "https://api.openai.com/v1"),
-        model=str(payload.get("model") or "gpt-4o-mini"),
+        base_url=base_url,
+        model=model,
     )
+
+
+def normalize_base_url(value: str) -> str | None:
+    candidate = value.strip()
+    markdown_match = re.fullmatch(r"\[[^\]]+\]\((https?://[^)]+)\)", candidate)
+    if markdown_match:
+        candidate = markdown_match.group(1).strip()
+    if not (candidate.startswith("http://") or candidate.startswith("https://")):
+        return None
+    return candidate.rstrip("/")
+
+
+def load_env_llm_config() -> UserLLMConfig | None:
+    api_key = os.environ.get("CRAM_LLM_API_KEY", "").strip()
+    if not api_key:
+        return None
+    base_url = normalize_base_url(os.environ.get("CRAM_LLM_BASE_URL", "https://api.openai.com/v1"))
+    model = os.environ.get("CRAM_LLM_MODEL", "gpt-4o-mini").strip()
+    if not base_url or not model:
+        return None
+    return UserLLMConfig(api_key=api_key, base_url=base_url, model=model)
+
+
+def load_effective_llm_config() -> UserLLMConfig | None:
+    return load_user_llm_config() or load_env_llm_config()
 

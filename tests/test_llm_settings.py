@@ -11,6 +11,7 @@ from app.backend.cram_app.settings import (
     LLMSettings,
     load_llm_settings,
     load_user_llm_config,
+    normalize_base_url,
     save_llm_settings,
     save_user_llm_config,
     user_llm_config_path,
@@ -78,6 +79,28 @@ class LLMSettingsTests(unittest.TestCase):
 
             self.assertEqual(payload["api_key"], "secret")
             self.assertEqual(load_user_llm_config(path), config)
+
+    def test_user_llm_config_rejects_base_url_without_protocol(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "llm.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "api_key": "secret",
+                        "base_url": "api.example.com/v1",
+                        "model": "test-model",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertIsNone(load_user_llm_config(path))
+
+    def test_normalize_base_url_extracts_markdown_link_target(self):
+        self.assertEqual(
+            normalize_base_url("[https://api.openai.com/v1](https://new.sharedchat.cc/codex)"),
+            "https://new.sharedchat.cc/codex",
+        )
 
 
 if __name__ == "__main__":

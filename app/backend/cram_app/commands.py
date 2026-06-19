@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .llm import LLMClient, LLMConfigurationError, LLMRequestError, OpenAICompatibleClient
 from .memory import MemoryStore
-from .settings import LLMSettings, load_user_llm_config
+from .settings import LLMSettings, load_effective_llm_config
 from .workspace import CramWorkspace, discover_workspace_sources
 
 
@@ -27,6 +27,7 @@ HELP_TEXT = """可用命令：
 /quiz     生成题库
 /summary  生成考前总结
 /lint     检查记忆、输出和引用冲突
+/config   重新配置 LLM
 /help     查看命令
 
 直接输入问题即可继续复习对话。
@@ -60,6 +61,8 @@ class CommandRouter:
             return self._remember(self._status())
         if command == "/lint":
             return self._remember(self._lint())
+        if command == "/config":
+            return CommandResult(kind="config", message="")
         if command == "/ingest":
             return self._remember(self._ingest_status())
         if command in ARTIFACT_COMMANDS:
@@ -172,7 +175,7 @@ class CommandRouter:
 
 
 def _default_llm_client() -> LLMClient:
-    config = load_user_llm_config()
+    config = load_effective_llm_config()
     if config:
         return OpenAICompatibleClient(
             LLMSettings(
