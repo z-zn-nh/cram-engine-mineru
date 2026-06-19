@@ -53,13 +53,13 @@ class CramTuiApp(App):
         padding: 0 1 0 2;
         background: #1e1e1e;
         color: #eeeeee;
+        border: none;
         border-left: thick #fab283;
-        border-top: tall #323232;
     }
 
     #home-prompt:focus {
+        border: none;
         border-left: thick #ffc09f;
-        border-top: tall #606060;
     }
 
     #session {
@@ -78,13 +78,13 @@ class CramTuiApp(App):
         padding: 0 1 0 2;
         background: #1e1e1e;
         color: #eeeeee;
+        border: none;
         border-left: thick #fab283;
-        border-top: tall #323232;
     }
 
     #session-prompt:focus {
+        border: none;
         border-left: thick #ffc09f;
-        border-top: tall #606060;
     }
 
     #hints {

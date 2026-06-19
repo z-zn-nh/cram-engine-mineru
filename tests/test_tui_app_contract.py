@@ -77,6 +77,20 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("#session-prompt", css)
         self.assertNotIn("dock: bottom", css.split("#home-prompt", 1)[1].split("#session-prompt", 1)[0])
 
+    def test_prompt_chrome_uses_left_accent_without_rectangular_frame(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+        css = module.CramTuiApp.CSS
+
+        home_prompt_css = css.split("#home-prompt", 1)[1].split("#home-prompt:focus", 1)[0]
+        home_focus_css = css.split("#home-prompt:focus", 1)[1].split("#session", 1)[0]
+        session_prompt_css = css.split("#session-prompt", 1)[1].split("#session-prompt:focus", 1)[0]
+        session_focus_css = css.split("#session-prompt:focus", 1)[1].split("#hints", 1)[0]
+
+        for block in [home_prompt_css, home_focus_css, session_prompt_css, session_focus_css]:
+            with self.subTest(block=block):
+                self.assertIn("border-left", block)
+                self.assertNotIn("border-top", block)
+
     def test_session_prompt_and_hints_do_not_overlap(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 
