@@ -313,8 +313,12 @@ class CramTuiApp(App):
 
     COMMANDS = App.COMMANDS | {CramCommands}
 
+    # ctrl+c is intentionally NOT bound to quit. Textual uses ctrl+c to copy the
+    # current selection: a focused Input copies its own selection and, when empty,
+    # bubbles up (SkipAction) to screen.copy_text, which copies the chat
+    # drag-selection to the clipboard via OSC 52. Quit stays on ctrl+q.
     BINDINGS = [
-        ("ctrl+c", "quit", "quit"),
+        ("ctrl+q", "quit", "quit"),
         ("ctrl+l", "clear_chat", "clear"),
     ]
 
@@ -618,7 +622,7 @@ class CramTuiApp(App):
         )
 
     def _hint_text(self) -> str:
-        return "^l clear    ctrl+p commands    /help shortcuts    /status workspace"
+        return "^q quit    ^l clear    drag+^c copy    ctrl+p commands    /help"
 
     def _logo_text(self) -> str:
         banner = (

@@ -364,6 +364,47 @@ class TuiAppContractTests(unittest.TestCase):
 
                 self.assertLessEqual(prompt_region.y + prompt_region.height, hints_region.y)
 
+    def test_ctrl_c_copies_chat_selection_instead_of_quitting(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        # ctrl+c must not be bound to quit (that would shadow the copy chain).
+        self.assertNotIn(("ctrl+c", "quit", "quit"), module.CramTuiApp.BINDINGS)
+
+        from textual.selection import SELECT_ALL
+
+        async def copy_selection():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "api_key": "secret",
+                            "base_url": "https://api.example.com/v1",
+                            "model": "test-model",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        body = app._append_message("cram", "采样定理答案要点", color="#fab283")
+                        await pilot.pause()
+                        # prompt input keeps focus after a turn; selection lives on the screen
+                        app.query_one("#session-prompt", Input).focus()
+                        app.screen.selections = {body: SELECT_ALL}
+                        await pilot.pause()
+                        await pilot.press("ctrl+c")
+                        await pilot.pause()
+                        return app.is_running, app._clipboard
+
+        is_running, clipboard = asyncio.run(copy_selection())
+
+        self.assertTrue(is_running)  # ctrl+c copied, it did not quit
+        self.assertIn("采样定理答案要点", clipboard)
+
 
 if __name__ == "__main__":
     unittest.main()
