@@ -50,7 +50,7 @@ description: 期末速成引擎 MinerU 自用版。Use when the user has a local
 ```text
 /help      查看命令
 /status    查看资料、输出、引用、记忆状态
-/ingest    扫描当前文件夹资料，后续接入 MinerU 解析
+/ingest    扫描当前文件夹资料，md/txt 直接索引，PDF/图片调用 MinerU 解析后索引
 /plan      生成 cram-output/速成计划.md
 /notes     生成 cram-output/知识点整合.md
 /mindmap   生成 cram-output/思维导图.md

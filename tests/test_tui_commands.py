@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from app.backend.cram_app.commands import CommandRouter
 from app.backend.cram_app.workspace import CramWorkspace
+from app.backend.cram_app.workspace_ingest import MaterialIngestResult
+from app.backend.cram_app.workspace_index import ParsedTextSource
 
 
 class FakeLLM:
@@ -91,6 +93,62 @@ class TuiCommandTests(unittest.TestCase):
             self.assertEqual(result.message, "采样定理是把连续信号离散化的基础。")
             self.assertIn("期末速成", llm.messages[0]["content"])
             self.assertEqual(llm.messages[-1]["content"], "帮我讲一下采样定理")
+
+    def test_ingest_indexes_text_sources_and_reports_pdf_as_pending(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            (workspace.root / "notes.md").write_text("Nyquist sampling theorem.", encoding="utf-8")
+            (workspace.root / "slides.pdf").write_text("pdf placeholder", encoding="utf-8")
+
+            def fake_ingest(workspace, sources):
+                return MaterialIngestResult(parsed_texts=[], processed_files=0, failed_files=[], pending_files=["slides.pdf"])
+
+            result = CommandRouter(workspace, material_ingester=fake_ingest).handle("/ingest")
+
+            self.assertEqual(result.kind, "ingest")
+            self.assertTrue((workspace.cram_dir / "index" / "chunks.jsonl").is_file())
+            self.assertIn("indexed 1 chunks", result.message)
+            self.assertIn("MinerU pending 1 files", result.message)
+
+    def test_ingest_indexes_mineru_markdown_from_pdf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            (workspace.root / "slides.pdf").write_text("pdf placeholder", encoding="utf-8")
+            parsed = workspace.cram_dir / "parsed" / "slides" / "auto.md"
+            parsed.parent.mkdir(parents=True, exist_ok=True)
+            parsed.write_text("Nyquist sampling theorem prevents aliasing.", encoding="utf-8")
+
+            def fake_ingest(workspace, sources):
+                return MaterialIngestResult(
+                    parsed_texts=[
+                        ParsedTextSource(path=parsed, source_file="slides.pdf", locator_prefix="mineru")
+                    ],
+                    processed_files=1,
+                    failed_files=[],
+                    pending_files=[],
+                )
+
+            result = CommandRouter(workspace, material_ingester=fake_ingest).handle("/ingest")
+
+            self.assertIn("MinerU parsed 1 files", result.message)
+            self.assertIn("indexed 1 chunks", result.message)
+            self.assertIn("slides.pdf:mineru:1", (workspace.cram_dir / "index" / "chunks.jsonl").read_text(encoding="utf-8"))
+
+    def test_free_text_question_includes_indexed_references_in_llm_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            (workspace.root / "notes.md").write_text(
+                "Nyquist sampling theorem prevents aliasing.",
+                encoding="utf-8",
+            )
+            CommandRouter(workspace).handle("/ingest")
+            llm = FakeLLM("use cited answer")
+
+            CommandRouter(workspace, llm=llm).handle("What prevents aliasing?")
+
+            system_content = llm.messages[0]["content"]
+            self.assertIn("notes.md:text:1", system_content)
+            self.assertIn("Nyquist sampling theorem", system_content)
 
     def test_free_text_can_stream_llm_chunks(self):
         with tempfile.TemporaryDirectory() as tmp:

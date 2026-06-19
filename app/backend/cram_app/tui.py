@@ -1,6 +1,7 @@
 from __future__ import annotations
 from functools import partial
 from pathlib import Path
+import sys
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -647,5 +648,16 @@ def _has_llm_config() -> bool:
     return bool(load_user_llm_config())
 
 
+def terminal_title_for_workspace(workspace_path: Path | str = ".") -> str:
+    workspace = CramWorkspace.open(workspace_path)
+    return f"cram - {workspace.root}"
+
+
+def terminal_title_escape(title: str) -> str:
+    return f"\033]0;{title}\a"
+
+
 def run_tui(workspace_path: Path | str = ".") -> None:
+    sys.stdout.write(terminal_title_escape(terminal_title_for_workspace(workspace_path)))
+    sys.stdout.flush()
     CramTuiApp(workspace_path).run()

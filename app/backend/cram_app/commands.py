@@ -8,6 +8,8 @@ from .llm import LLMClient, LLMConfigurationError, LLMRequestError, OpenAICompat
 from .memory import MemoryStore
 from .settings import LLMSettings, load_effective_llm_config
 from .workspace import CramWorkspace, discover_workspace_sources
+from .workspace_ingest import MaterialIngestResult, ingest_material_sources
+from .workspace_index import index_text_sources, search_workspace_chunks
 
 
 ARTIFACT_COMMANDS = {
@@ -43,10 +45,11 @@ class CommandResult:
 
 
 class CommandRouter:
-    def __init__(self, workspace: CramWorkspace, *, llm: LLMClient | None = None):
+    def __init__(self, workspace: CramWorkspace, *, llm: LLMClient | None = None, material_ingester=None):
         self.workspace = workspace
         self.memory = MemoryStore.open(workspace)
         self.llm = llm or _default_llm_client()
+        self.material_ingester = material_ingester or ingest_material_sources
 
     def handle(self, text: str) -> CommandResult:
         message = text.strip()
@@ -94,6 +97,8 @@ class CommandRouter:
 
     def _ingest_status(self) -> CommandResult:
         sources = discover_workspace_sources(self.workspace.root)
+        material_result: MaterialIngestResult = self.material_ingester(self.workspace, sources)
+        index_result = index_text_sources(self.workspace, extra_texts=material_result.parsed_texts)
         manifest = self.workspace.cram_dir / "raw_manifest.json"
         manifest.write_text(
             "\n".join(source.relative_path.as_posix() for source in sources),
@@ -102,8 +107,13 @@ class CommandRouter:
         return CommandResult(
             kind="ingest",
             message=(
-                f"已扫描 {len(sources)} 个资料文件。第一版会先记录清单；"
-                "后续接入 MinerU 后会解析 PDF/PPT/图片并建立索引。\n"
+                f"Scanned {len(sources)} source files.\n"
+                f"MinerU parsed {material_result.processed_files} files.\n"
+                f"indexed {index_result.indexed_chunks} chunks from {index_result.indexed_files} text files.\n"
+                f"MinerU pending {len(material_result.pending_files)} files: "
+                f"{', '.join(material_result.pending_files) or 'none'}\n"
+                f"MinerU failed {len(material_result.failed_files)} files: "
+                f"{', '.join(material_result.failed_files) or 'none'}\n"
                 f"Wrote {manifest.relative_to(self.workspace.root).as_posix()}"
             ),
             wrote=[manifest],
@@ -183,10 +193,19 @@ class CommandRouter:
 - 当前阶段还没有接入资料检索；如果需要引用课程资料，明确说明需要先运行 /ingest。
 - 不要编造不存在的资料来源或页码。
 """
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message},
-        ]
+        evidence = search_workspace_chunks(self.workspace, message, limit=5)
+        if evidence:
+            evidence_block = "\n\n".join(
+                f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence
+            )
+            system_prompt += (
+                "\nIndexed course references are available below. "
+                "Prefer them over memory and cite labels in square brackets.\n\n"
+                f"{evidence_block}\n"
+            )
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.append({"role": "user", "content": message})
+        return messages
 
     def _lint(self) -> CommandResult:
         conflicts = self.memory.load_conflicts()

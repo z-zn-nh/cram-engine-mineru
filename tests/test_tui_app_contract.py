@@ -44,6 +44,17 @@ class TuiAppContractTests(unittest.TestCase):
             self.assertIn(str(workspace_root.resolve()), status)
             self.assertNotIn("cwd workspace", status)
 
+    def test_run_tui_sets_terminal_title_to_workspace_path(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace_root = Path(tmp) / "course"
+            title = module.terminal_title_for_workspace(workspace_root)
+
+            self.assertIn(str(workspace_root.resolve()), title)
+            self.assertNotIn("System32", title)
+            self.assertEqual(module.terminal_title_escape(title), f"\x1b]0;{title}\x07")
+
     def test_tui_css_uses_compact_opencode_style_surface(self):
         module = importlib.import_module("app.backend.cram_app.tui")
         css = module.CramTuiApp.CSS
