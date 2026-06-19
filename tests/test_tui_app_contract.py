@@ -126,6 +126,45 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("hi", joined)
         self.assertIn("thinking", joined)
 
+    def test_tui_shows_feedback_before_slow_slash_command_finishes(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        class SlowRouter:
+            def handle(self, text):
+                time.sleep(0.5)
+                return CommandResult(kind="ingest", message="done")
+
+        async def submit_command():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "api_key": "secret",
+                            "base_url": "https://api.example.com/v1",
+                            "model": "test-model",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    app.router = SlowRouter()
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        started = time.perf_counter()
+                        app._handle_prompt("/ingest")
+                        await pilot.pause(0.1)
+                        elapsed = time.perf_counter() - started
+                        renderables = [node.content for node in app.query("#chat .message-body")]
+                        return elapsed, renderables
+
+        elapsed, renderables = asyncio.run(submit_command())
+        joined = "\n".join(str(item) for item in renderables)
+
+        self.assertLess(elapsed, 0.3)
+        self.assertIn("/ingest", joined)
+        self.assertIn("正在处理", joined)
+
     def test_tui_starts_on_centered_llm_setup_when_config_is_missing(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 

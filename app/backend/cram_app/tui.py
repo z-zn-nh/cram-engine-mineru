@@ -62,6 +62,14 @@ OPENCODE_THEME = Theme(
     },
 )
 
+class _TuiCommandError:
+    kind = "error"
+    wrote: list[Path] = []
+
+    def __init__(self, message: str):
+        self.message = message
+
+
 # Slash commands surfaced in the ctrl+p palette (kept aligned with commands.HELP_TEXT).
 PALETTE_COMMANDS = [
     ("/ingest", "解析并索引当前文件夹资料"),
@@ -398,27 +406,31 @@ class CramTuiApp(App):
 
         command = text.split(maxsplit=1)[0].lower()
         if command in {"/config", "/model", "/help", "/status", "/lint", "/ingest", "/plan", "/notes", "/mindmap", "/quiz", "/summary"}:
-            result = self.router.handle(text)
-            if result.kind == "config":
+            if command == "/config":
                 self._open_llm_setup(auto_fetch=False)
                 return
-            if result.kind == "model":
+            if command == "/model":
                 self._open_llm_setup(auto_fetch=True)
                 return
 
             self._enter_session()
             self._write_user(text)
-            if result.message:
-                self._write_agent(result.message)
-            if result.wrote:
-                self._write_wrote(result.wrote)
-            self.query_one("#status", Static).update(self._status_text())
+            pending = self._write_agent("正在处理...")
+            self._run_command_worker(text, pending.id or "")
             return
 
         self._enter_session()
         self._write_user(text)
         pending = self._write_agent("thinking…")
         self._run_prompt_worker(text, pending.id or "")
+
+    @work(exclusive=False, thread=True)
+    def _run_command_worker(self, text: str, message_id: str) -> None:
+        try:
+            result = self.router.handle(text)
+        except Exception as exc:
+            result = _TuiCommandError(f"命令执行失败：\n{exc}")
+        self.call_from_thread(self._finish_prompt, result, message_id)
 
     @work(exclusive=False, thread=True)
     def _run_prompt_worker(self, text: str, message_id: str) -> None:
