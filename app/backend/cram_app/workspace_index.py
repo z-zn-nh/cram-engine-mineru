@@ -5,11 +5,22 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .chunks import ChunkRecord
 from .workspace import CramWorkspace, WorkspaceSource, discover_workspace_sources
 
 
 TEXT_EXTENSIONS = {".md", ".txt"}
+
+
+@dataclass(frozen=True)
+class ChunkRecord:
+    chunk_id: str
+    source_file: str
+    locator: str
+    text: str
+
+    @property
+    def citation_label(self) -> str:
+        return f"{self.source_file}:{self.locator}"
 
 
 @dataclass(frozen=True)
