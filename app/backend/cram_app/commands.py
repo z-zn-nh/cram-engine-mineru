@@ -106,17 +106,13 @@ class CommandRouter:
         )
         return CommandResult(
             kind="ingest",
-            message=(
-                f"Scanned {len(sources)} source files.\n"
-                f"MinerU parsed {material_result.processed_files} files.\n"
-                f"indexed {index_result.indexed_chunks} chunks from {index_result.indexed_files} text files.\n"
-                f"MinerU pending {len(material_result.pending_files)} files: "
-                f"{', '.join(material_result.pending_files) or 'none'}\n"
-                f"MinerU failed {len(material_result.failed_files)} files: "
-                f"{', '.join(material_result.failed_files) or 'none'}\n"
-                f"Wrote {manifest.relative_to(self.workspace.root).as_posix()}"
+            message=_format_ingest_message(
+                workspace=self.workspace,
+                total_sources=len(sources),
+                material_result=material_result,
+                indexed_chunks=index_result.indexed_chunks,
+                indexed_files=index_result.indexed_files,
             ),
-            wrote=[manifest],
         )
 
     def _write_artifact(self, command: str) -> CommandResult:
@@ -246,6 +242,65 @@ def _llm_settings_from_env() -> LLMSettings:
         model=os.environ.get("CRAM_LLM_MODEL", "gpt-4o-mini"),
         api_key_env=os.environ.get("CRAM_LLM_API_KEY_ENV", "CRAM_LLM_API_KEY"),
     )
+
+
+def _format_ingest_message(
+    *,
+    workspace: CramWorkspace,
+    total_sources: int,
+    material_result: MaterialIngestResult,
+    indexed_chunks: int,
+    indexed_files: int,
+) -> str:
+    lines = [
+        "资料扫描完成。",
+        f"- 当前文件夹：{workspace.root}",
+        f"- 找到资料：{total_sources} 个文件",
+        f"- MinerU 已解析：{material_result.processed_files} 个文件",
+        f"- 已建立索引：{indexed_chunks} 个片段，来自 {indexed_files} 个文本/解析结果",
+    ]
+    if material_result.pending_files:
+        lines.append(f"- 暂未处理：{len(material_result.pending_files)} 个文件（{_preview_names(material_result.pending_files)}）")
+    else:
+        lines.append("- 暂未处理：0 个文件")
+    if material_result.failed_files:
+        lines.append(f"- 解析失败：{len(material_result.failed_files)} 个文件（{_preview_names(material_result.failed_files)}）")
+    else:
+        lines.append("- 解析失败：0 个文件")
+    if _looks_like_code_repository(workspace.root):
+        lines.extend(
+            [
+                "",
+                "提示：你现在可能在代码仓库里运行 cram。",
+                "请先进入某个学科资料文件夹，比如 D:\\期末资料\\通信原理，再运行 cram 和 /ingest。",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "",
+                "下一步：直接提问，或输入 /notes、/mindmap、/quiz 生成复习产物。",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def _looks_like_code_repository(path: Path) -> bool:
+    code_markers = {
+        ".git",
+        "pyproject.toml",
+        "package.json",
+        "requirements.txt",
+        "Cargo.toml",
+        "go.mod",
+    }
+    return any((path / marker).exists() for marker in code_markers)
+
+
+def _preview_names(paths: list[str], *, limit: int = 3) -> str:
+    shown = paths[:limit]
+    suffix = "" if len(paths) <= limit else f" 等 {len(paths)} 个"
+    return "、".join(shown) + suffix
 
 
 def _llm_setup_message(error: Exception) -> str:

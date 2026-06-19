@@ -107,8 +107,9 @@ class TuiCommandTests(unittest.TestCase):
 
             self.assertEqual(result.kind, "ingest")
             self.assertTrue((workspace.cram_dir / "index" / "chunks.jsonl").is_file())
-            self.assertIn("indexed 1 chunks", result.message)
-            self.assertIn("MinerU pending 1 files", result.message)
+            self.assertIn("已建立索引：1 个片段", result.message)
+            self.assertIn("暂未处理：1 个文件", result.message)
+            self.assertNotIn("Scanned", result.message)
 
     def test_ingest_indexes_mineru_markdown_from_pdf(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,9 +131,23 @@ class TuiCommandTests(unittest.TestCase):
 
             result = CommandRouter(workspace, material_ingester=fake_ingest).handle("/ingest")
 
-            self.assertIn("MinerU parsed 1 files", result.message)
-            self.assertIn("indexed 1 chunks", result.message)
+            self.assertIn("MinerU 已解析：1 个文件", result.message)
+            self.assertIn("已建立索引：1 个片段", result.message)
             self.assertIn("slides.pdf:mineru:1", (workspace.cram_dir / "index" / "chunks.jsonl").read_text(encoding="utf-8"))
+
+    def test_ingest_warns_when_running_inside_code_repository(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "cram-engine")
+            (workspace.root / ".git").mkdir()
+            (workspace.root / "README.md").write_text("# project", encoding="utf-8")
+
+            def fake_ingest(workspace, sources):
+                return MaterialIngestResult(parsed_texts=[], processed_files=0, failed_files=[], pending_files=[])
+
+            result = CommandRouter(workspace, material_ingester=fake_ingest).handle("/ingest")
+
+            self.assertIn("你现在可能在代码仓库里运行 cram", result.message)
+            self.assertIn("请先进入某个学科资料文件夹", result.message)
 
     def test_free_text_question_includes_indexed_references_in_llm_context(self):
         with tempfile.TemporaryDirectory() as tmp:
