@@ -4,7 +4,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .llm import LLMClient, LLMConfigurationError, LLMRequestError, OpenAICompatibleClient
+from .llm import (
+    LLMClient,
+    LLMConfigurationError,
+    LLMRequestError,
+    OpenAICompatibleClient,
+    StreamEvent,
+)
 from .memory import MemoryStore
 from .settings import LLMSettings, load_effective_llm_config
 from .workspace import CramWorkspace, discover_workspace_sources
@@ -226,27 +232,30 @@ class CommandRouter:
         if not hasattr(self.llm, "stream_chat"):
             result = self._remember(self._ask_llm(message))
             if result.message:
-                yield result.message
+                yield StreamEvent("content", result.message)
             return
 
-        chunks: list[str] = []
+        content_parts: list[str] = []
         try:
-            for chunk in self.llm.stream_chat(self._llm_messages(message)):
-                chunks.append(chunk)
-                yield chunk
+            for event in self.llm.stream_chat(self._llm_messages(message)):
+                if not isinstance(event, StreamEvent):
+                    event = StreamEvent("content", str(event))
+                if event.kind == "content":
+                    content_parts.append(event.text)
+                yield event
         except LLMConfigurationError as exc:
             message_text = _llm_setup_message(exc)
             self.memory.append_session_event("agent", message_text)
-            yield message_text
+            yield StreamEvent("content", message_text)
         except LLMRequestError as exc:
             message_text = (
                 "LLM 请求失败，当前会话已保留。请检查模型服务地址、模型名和网络状态。\n"
                 f"{exc}"
             )
             self.memory.append_session_event("agent", message_text)
-            yield message_text
+            yield StreamEvent("content", message_text)
         else:
-            answer = "".join(chunks)
+            answer = "".join(content_parts)
             if answer:
                 self.memory.append_session_event("agent", answer)
 

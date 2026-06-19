@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.backend.cram_app.commands import CommandRouter
+from app.backend.cram_app.llm import StreamEvent
 from app.backend.cram_app.workspace import CramWorkspace
 from app.backend.cram_app.workspace_ingest import MaterialIngestResult
 from app.backend.cram_app.workspace_index import ParsedTextSource
@@ -24,6 +25,14 @@ class FakeStreamingLLM(FakeLLM):
         self.messages = messages
         yield "采样"
         yield "定理"
+
+
+class FakeReasoningLLM(FakeLLM):
+    def stream_chat(self, messages: list[dict]):
+        self.messages = messages
+        yield StreamEvent("reasoning", "先回忆采样定理…")
+        yield StreamEvent("content", "采样")
+        yield StreamEvent("content", "定理")
 
 
 class TuiCommandTests(unittest.TestCase):
@@ -203,12 +212,27 @@ class TuiCommandTests(unittest.TestCase):
             llm = FakeStreamingLLM()
             router = CommandRouter(workspace, llm=llm)
 
-            chunks = list(router.stream("帮我讲一下采样定理"))
+            events = list(router.stream("帮我讲一下采样定理"))
 
-            self.assertEqual(chunks, ["采样", "定理"])
-            events = router.memory.load_recent_session_events()
-            self.assertEqual(events[-1]["role"], "agent")
-            self.assertEqual(events[-1]["content"], "采样定理")
+            self.assertEqual([e.text for e in events if e.kind == "content"], ["采样", "定理"])
+            events_log = router.memory.load_recent_session_events()
+            self.assertEqual(events_log[-1]["role"], "agent")
+            self.assertEqual(events_log[-1]["content"], "采样定理")
+
+    def test_stream_surfaces_reasoning_then_content_and_saves_only_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            router = CommandRouter(workspace, llm=FakeReasoningLLM())
+
+            events = list(router.stream("帮我讲一下采样定理"))
+
+            self.assertEqual(
+                [(e.kind, e.text) for e in events],
+                [("reasoning", "先回忆采样定理…"), ("content", "采样"), ("content", "定理")],
+            )
+            saved = router.memory.load_recent_session_events()[-1]
+            self.assertEqual(saved["role"], "agent")
+            self.assertEqual(saved["content"], "采样定理")  # reasoning is not persisted
 
     def test_free_text_reports_missing_llm_api_key_without_crashing(self):
         with tempfile.TemporaryDirectory() as tmp:

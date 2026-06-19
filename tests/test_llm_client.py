@@ -139,7 +139,29 @@ class LLMClientTests(unittest.TestCase):
             chunks = list(client.stream_chat([{"role": "user", "content": "x"}]))
 
         self.assertTrue(captured["body"]["stream"])
-        self.assertEqual(chunks, ["你", "好"])
+        self.assertEqual([(e.kind, e.text) for e in chunks], [("content", "你"), ("content", "好")])
+
+    def test_stream_chat_surfaces_reasoning_then_content(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text=(
+                    'data: {"choices":[{"delta":{"reasoning_content":"想"}}]}\n\n'
+                    'data: {"choices":[{"delta":{"content":"答"}}]}\n\n'
+                    "data: [DONE]\n\n"
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        with patch.dict(os.environ, {"CRAM_TEST_API_KEY": "secret"}, clear=True):
+            client = OpenAICompatibleClient(_settings(), http_client=http_client)
+            chunks = list(client.stream_chat([{"role": "user", "content": "x"}]))
+
+        self.assertEqual(
+            [(e.kind, e.text) for e in chunks],
+            [("reasoning", "想"), ("content", "答")],
+        )
 
     def test_stream_chat_surfaces_error_event(self):
         def handler(request: httpx.Request) -> httpx.Response:

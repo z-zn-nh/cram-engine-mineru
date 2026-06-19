@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from typing import Protocol
 
 import httpx
@@ -15,6 +16,14 @@ class LLMConfigurationError(RuntimeError):
 
 class LLMRequestError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class StreamEvent:
+    """A single streamed delta. kind is "reasoning" (model thinking) or "content" (answer)."""
+
+    kind: str
+    text: str
 
 
 # Some OpenAI-compatible gateways reject default library User-Agents (e.g. "python-httpx")
@@ -128,11 +137,14 @@ class OpenAICompatibleClient:
                 raise LLMRequestError(f"LLM stream error: {detail}")
             try:
                 delta = data["choices"][0].get("delta") or {}
-                content = delta.get("content")
             except (KeyError, IndexError, TypeError) as exc:
                 raise LLMRequestError(f"Unexpected stream response shape: {exc}") from exc
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning:
+                yield StreamEvent("reasoning", str(reasoning))
+            content = delta.get("content")
             if content:
-                yield str(content)
+                yield StreamEvent("content", str(content))
 
 
 def _safe_json(response: httpx.Response):

@@ -405,6 +405,55 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertTrue(is_running)  # ctrl+c copied, it did not quit
         self.assertIn("采样定理答案要点", clipboard)
 
+    def test_typing_slash_shows_filtered_command_menu(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        await pilot.pause()
+                        app.query_one("#session-prompt", Input).focus()
+                        await pilot.press("/", "p")
+                        await pilot.pause()
+                        menu = app.query_one("#command-menu")
+                        return (not menu.has_class("hidden"), list(app._menu_commands))
+
+        visible, commands = asyncio.run(run())
+        self.assertTrue(visible)
+        self.assertEqual(commands, ["/plan"])
+
+    def test_written_paths_are_tracked_and_openable(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        app._write_wrote([app.workspace.output_dir / "速成计划.md"])
+                        await pilot.pause()
+                        return [p.name for p in app._wrote_paths], hasattr(app, "action_open_artifact")
+
+        names, has_action = asyncio.run(run())
+        self.assertEqual(names, ["速成计划.md"])
+        self.assertTrue(has_action)
+
 
 if __name__ == "__main__":
     unittest.main()
