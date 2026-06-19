@@ -74,7 +74,7 @@ class CramTuiApp(App):
     #session-prompt {
         dock: bottom;
         height: 3;
-        margin: 0 2;
+        margin: 0 2 1 2;
         padding: 0 1 0 2;
         background: #1e1e1e;
         color: #eeeeee;

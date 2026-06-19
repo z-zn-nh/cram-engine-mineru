@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -75,6 +76,25 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("#home-prompt", css)
         self.assertIn("#session-prompt", css)
         self.assertNotIn("dock: bottom", css.split("#home-prompt", 1)[1].split("#session-prompt", 1)[0])
+
+    def test_session_prompt_and_hints_do_not_overlap(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def inspect_layout(size):
+            with tempfile.TemporaryDirectory() as tmp:
+                app = module.CramTuiApp(tmp)
+                async with app.run_test(size=size) as pilot:
+                    await pilot.press("h", "i", "enter")
+                    await pilot.pause()
+                    prompt = app.query_one("#session-prompt")
+                    hints = app.query_one("#hints")
+                    return prompt.region, hints.region
+
+        for size in [(80, 24), (100, 30), (120, 40)]:
+            with self.subTest(size=size):
+                prompt_region, hints_region = asyncio.run(inspect_layout(size))
+
+                self.assertLessEqual(prompt_region.y + prompt_region.height, hints_region.y)
 
 
 if __name__ == "__main__":
