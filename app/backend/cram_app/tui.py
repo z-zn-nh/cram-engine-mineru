@@ -46,6 +46,22 @@ class CramTuiApp(App):
         padding: 1 2;
     }
 
+    #home-prompt {
+        width: 78;
+        height: 3;
+        margin-top: 1;
+        padding: 0 1 0 2;
+        background: #1e1e1e;
+        color: #eeeeee;
+        border-left: thick #fab283;
+        border-top: tall #323232;
+    }
+
+    #home-prompt:focus {
+        border-left: thick #ffc09f;
+        border-top: tall #606060;
+    }
+
     #session {
         height: 1fr;
         background: #141414;
@@ -55,7 +71,7 @@ class CramTuiApp(App):
         display: none;
     }
 
-    #prompt {
+    #session-prompt {
         dock: bottom;
         height: 3;
         margin: 0 2;
@@ -66,7 +82,7 @@ class CramTuiApp(App):
         border-top: tall #323232;
     }
 
-    #prompt:focus {
+    #session-prompt:focus {
         border-left: thick #ffc09f;
         border-top: tall #606060;
     }
@@ -99,9 +115,10 @@ class CramTuiApp(App):
         with Middle(id="home"):
             with Center():
                 yield Static(self._home_text(), id="home-card")
+                yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="home-prompt")
         with Vertical(id="session", classes="hidden"):
             yield RichLog(id="chat", wrap=True, highlight=True, markup=True)
-        yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="prompt")
+        yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="session-prompt", classes="hidden")
         yield Static(self._hint_text(), id="hints")
 
     def on_mount(self) -> None:
@@ -112,11 +129,14 @@ class CramTuiApp(App):
             chat.write(boot_summary)
         else:
             chat.write("[#808080]first run here. use[/#808080] [bold #fab283]/ingest[/bold #fab283] [#808080]or ask a question.[/#808080]")
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#home-prompt", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         event.input.value = ""
+        self._handle_prompt(text)
+
+    def _handle_prompt(self, text: str) -> None:
         if not text:
             return
 
@@ -140,6 +160,9 @@ class CramTuiApp(App):
         self._session_started = True
         self.query_one("#home").add_class("hidden")
         self.query_one("#session").remove_class("hidden")
+        self.query_one("#home-prompt").add_class("hidden")
+        self.query_one("#session-prompt").remove_class("hidden")
+        self.query_one("#session-prompt", Input).focus()
         chat = self.query_one("#chat", RichLog)
         chat.write("[bold #fab283]cram[/bold #fab283] [#808080]session[/#808080]")
         chat.write(f"[#808080]workspace[/#808080] {self.workspace.root}")

@@ -65,6 +65,17 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("CRAM", app._logo_text())
         self.assertIn(str(app.workspace.root), app._home_text())
 
+    def test_home_prompt_is_centered_not_docked_to_terminal_bottom(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+        source = (ROOT / "app" / "backend" / "cram_app" / "tui.py").read_text(encoding="utf-8")
+        css = module.CramTuiApp.CSS
+
+        self.assertIn('id="home-prompt"', source)
+        self.assertIn('id="session-prompt"', source)
+        self.assertIn("#home-prompt", css)
+        self.assertIn("#session-prompt", css)
+        self.assertNotIn("dock: bottom", css.split("#home-prompt", 1)[1].split("#session-prompt", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()
