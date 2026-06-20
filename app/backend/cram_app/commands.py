@@ -108,6 +108,7 @@ _TOOL_LABELS = {
     "read_file": "读取文件",
     "grep_materials": "搜索资料",
     "switch_workspace": "切换课程文件夹",
+    "update_memory": "记入长期记忆",
 }
 
 
@@ -199,14 +200,22 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "switch_workspace",
-            "description": "把工作区切换到另一个课程文件夹。用户说「切换到/打开 <某个文件夹>」「换到XX课」时调用。",
+            "name": "update_memory",
+            "description": (
+                "把一条值得长期记住的事实写入课程长期记忆（跨会话保留）。"
+                "适合：考试形式（开卷/闭卷/题型）、老师强调的必考点、用户偏好、"
+                "用户反复搞错或已经掌握的知识点。只记durable的事实，不要记一次性闲聊。"
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "path": {"type": "string", "description": "目标课程文件夹的路径（绝对路径，或相对当前文件夹）。"}
+                    "note": {"type": "string", "description": "要记住的一句话事实，尽量具体。"},
+                    "category": {
+                        "type": "string",
+                        "description": "可选分类：考点 / 偏好 / 易错 / 掌握 / 其他。",
+                    },
                 },
-                "required": ["path"],
+                "required": ["note"],
             },
         },
     },
@@ -558,6 +567,15 @@ class CommandRouter:
             return (self._read_file(str(args.get("path", ""))), [], False)
         if name == "grep_materials":
             return (self._grep_materials(str(args.get("query", ""))), [], False)
+        if name == "update_memory":
+            note = str(args.get("note", "")).strip()
+            if not note:
+                return ("没有提供要记住的内容。", [], False)
+            category = str(args.get("category", "")).strip() or None
+            added = self.memory.append_memory_note(note, category=category)
+            if added:
+                return (f"已记入长期记忆：{note}", [], False)
+            return (f"这条长期记忆已存在：{note}", [], False)
         return (f"未知工具：{name}", [], False)
 
     def _resolve_in_workspace(self, rel_path: str) -> Path | None:
@@ -818,6 +836,7 @@ class CommandRouter:
 - 用户想被系统讲解、带着复习某个主题（「教我X」「带我过一遍X」「系统学X」）时，调用 start_teaching 进入四步教学法。
 - 导入/解析/重新索引资料用 ingest_materials；看有哪些文件、读文件、搜关键词、换课程文件夹分别用 list_files / read_file / grep_materials / switch_workspace；看状态用 show_status；查冲突用 lint_conflicts。
 - 只是概念讲解、答疑、讨论时直接用中文回答，不要调用工具。
+- 当你得知值得长期记住的事实（考试形式、老师强调的必考点、用户偏好、用户反复搞错或已掌握的点）时，调用 update_memory 记下来。
 - 调用工具后用一两句话说明你做了什么、产物在哪，不要重复整篇内容。
 
 回答规则：

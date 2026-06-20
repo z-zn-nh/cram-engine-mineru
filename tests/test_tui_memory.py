@@ -7,6 +7,20 @@ from app.backend.cram_app.workspace import CramWorkspace
 
 
 class TuiMemoryTests(unittest.TestCase):
+    def test_append_memory_note_dedups_and_categorizes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            store = MemoryStore.open(workspace)
+
+            self.assertTrue(store.append_memory_note("第3章必考", category="考点"))
+            self.assertTrue(store.append_memory_note("用户常混淆采样与量化", category="易错"))
+            self.assertFalse(store.append_memory_note("第3章必考", category="考点"))  # dedup
+
+            memory = MemoryStore.open(workspace).load_boot_summary()
+            self.assertIn("- [考点] 第3章必考", memory)
+            self.assertIn("- [易错] 用户常混淆采样与量化", memory)
+            self.assertEqual(memory.count("第3章必考"), 1)
+
     def test_memory_store_persists_boot_summary_and_sessions(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp) / "数字电路")

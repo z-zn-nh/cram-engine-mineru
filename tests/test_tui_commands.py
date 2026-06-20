@@ -603,7 +603,45 @@ class AgentLoopGuardTests(unittest.TestCase):
             self.assertEqual(router.memory.load_recent_session_events()[-1]["role"], "agent")
 
 
-class ContextAssemblyTests(unittest.TestCase):
+class FakeUpdateMemoryLLM(FakeLLM):
+    """Records a durable fact via update_memory, then answers."""
+
+    def __init__(self, note: str, category: str = "考点"):
+        super().__init__()
+        self.note = note
+        self.category = category
+        self.calls = 0
+
+    def stream_agent(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            yield StreamEvent(
+                "tool_call",
+                json.dumps(
+                    {
+                        "id": "m1",
+                        "name": "update_memory",
+                        "arguments": json.dumps({"note": self.note, "category": self.category}),
+                    }
+                ),
+            )
+        else:
+            yield StreamEvent("content", "记住了。")
+
+
+class LongTermMemoryTests(unittest.TestCase):
+    def test_update_memory_tool_persists_and_feeds_next_turn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeUpdateMemoryLLM("第3章必考"))
+
+            list(router.run_turn("老师说第3章必考"))
+
+            # persisted to long-term memory
+            self.assertIn("第3章必考", router.memory.load_boot_summary())
+            # and now rides in the stable prefix on the next turn
+            self.assertIn("第3章必考", router._system_prompt())
+            self.assertIn("长期记忆", router._system_prompt())
     def test_system_prompt_includes_workspace_map_and_excludes_retrieval(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp) / "通信原理")

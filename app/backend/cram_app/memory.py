@@ -44,6 +44,20 @@ class MemoryStore:
         self.boot_summary_path.write_text(content, encoding="utf-8")
         return self.boot_summary_path
 
+    def append_memory_note(self, note: str, *, category: str | None = None) -> bool:
+        """Append a durable note to the long-term memory file. Returns False if it already exists."""
+        note = note.strip()
+        if not note:
+            return False
+        line = f"- [{category}] {note}" if category else f"- {note}"
+        existing = self.load_boot_summary()
+        lines = [item for item in existing.splitlines() if item.strip()]
+        if line in lines:
+            return False
+        lines.append(line)
+        self.save_boot_summary("\n".join(lines) + "\n")
+        return True
+
     def load_boot_summary(self) -> str:
         if not self.boot_summary_path.exists():
             return ""
