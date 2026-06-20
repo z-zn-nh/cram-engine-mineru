@@ -221,7 +221,7 @@ class TuiCommandTests(unittest.TestCase):
             self.assertIn("你现在可能在代码仓库里运行 cram", result.message)
             self.assertIn("请先进入某个学科资料文件夹", result.message)
 
-    def test_free_text_question_includes_indexed_references_in_llm_context(self):
+    def test_free_text_question_puts_retrieval_in_volatile_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = CramWorkspace.open(Path(tmp))
             (workspace.root / "notes.md").write_text(
@@ -233,10 +233,11 @@ class TuiCommandTests(unittest.TestCase):
 
             CommandRouter(workspace, llm=llm).handle("What prevents aliasing?")
 
-            system_content = llm.messages[0]["content"]
-            self.assertIn("notes.md:text:1", system_content)
-            self.assertIn("Nyquist sampling theorem", system_content)
-            self.assertNotIn("当前阶段还没有接入资料检索", system_content)
+            # retrieval rides with the last user message (volatile tail) so the system
+            # prefix stays byte-stable and cacheable
+            self.assertIn("notes.md:text:1", llm.messages[-1]["content"])
+            self.assertIn("Nyquist sampling theorem", llm.messages[-1]["content"])
+            self.assertNotIn("notes.md:text:1", llm.messages[0]["content"])
 
     def test_free_text_can_stream_llm_chunks(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -600,6 +601,61 @@ class AgentLoopGuardTests(unittest.TestCase):
             contents = [e.text for e in events if e.kind == "content"]
             self.assertIn("已尽力检索，先这样。", contents)  # forced closing answer, not silence
             self.assertEqual(router.memory.load_recent_session_events()[-1]["role"], "agent")
+
+
+class ContextAssemblyTests(unittest.TestCase):
+    def test_system_prompt_includes_workspace_map_and_excludes_retrieval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "notes.md").write_text(
+                "Nyquist sampling theorem prevents aliasing.", encoding="utf-8"
+            )
+            router = CommandRouter(workspace, llm=FakeLLM())
+            router.handle("/ingest")
+
+            system = router._system_prompt()
+
+            self.assertIn("通信原理", system)  # workspace map present
+            self.assertIn("notes.md", system)  # file listed in the map
+            self.assertNotIn("Nyquist sampling theorem", system)  # raw chunk text not in stable prefix
+
+    def test_agent_messages_replays_recent_history(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+            router.memory.append_session_event("user", "采样定理是什么")
+            router.memory.append_session_event("agent", "它说的是……")
+
+            messages = router._agent_messages("再讲讲混叠")
+
+            self.assertEqual([m["role"] for m in messages], ["system", "user", "assistant", "user"])
+            self.assertEqual(messages[1]["content"], "采样定理是什么")
+            self.assertEqual(messages[2]["content"], "它说的是……")
+            self.assertTrue(messages[-1]["content"].startswith("再讲讲混叠"))
+
+    def test_system_prompt_stable_across_conversation_turns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            first = router._system_prompt()
+            router.memory.append_session_event("user", "hi")
+            router.memory.append_session_event("agent", "hello")
+            second = router._system_prompt()
+
+            self.assertEqual(first, second)  # cacheable prefix must not change per turn
+
+    def test_history_excludes_current_user_echo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+            router.memory.append_session_event("user", "当前这句话")  # simulate run_turn pre-logging
+
+            messages = router._agent_messages("当前这句话")
+
+            # the just-logged current message appears once (as the tail), not duplicated in history
+            user_contents = [m["content"] for m in messages if m["role"] == "user"]
+            self.assertEqual(user_contents.count("当前这句话"), 1)
 
 
 if __name__ == "__main__":

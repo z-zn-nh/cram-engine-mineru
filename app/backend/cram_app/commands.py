@@ -33,6 +33,7 @@ from .workspace_index import (
     index_text_sources,
     load_workspace_chunks,
     search_workspace_chunks,
+    workspace_chunks_path,
 )
 
 
@@ -81,6 +82,8 @@ HELP_TEXT = """可用命令：
 """
 
 MAX_AGENT_STEPS = 8
+# How many prior conversation turns (user+assistant pairs) to replay into the context window.
+HISTORY_TURNS = 10
 
 # Maps a tool name the model can call to the slash-style artifact key it generates.
 TOOL_ARTIFACTS = {
@@ -804,60 +807,92 @@ class CommandRouter:
         if answer:
             self.memory.append_session_event("agent", answer)
 
-    def _agent_messages(self, message: str) -> list[dict]:
-        system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent，可以调用工具。
-
-当前课程文件夹：{self.workspace.course_name}
+    def _system_prompt(self) -> str:
+        # Stable prefix: kept byte-identical across turns so DeepSeek's automatic prefix cache hits.
+        # Per-turn retrieval is deliberately NOT here — it goes in the volatile tail (see
+        # _current_user_message) so it never busts the cached prefix.
+        prompt = """你是期末速成引擎，一个面向考前复习的中文学习 Agent，可以调用工具。
 
 工作方式：
-- 用户想要复习产物（速成计划/知识点整合/思维导图/题库/考前总结）时，调用对应的 generate_* 工具生成并写入文件；可用 focus 参数聚焦主题或题型。
+- 用户想要复习产物（速成计划/知识点整合/思维导图/题库/考前总结）时，调用对应的 generate_* 工具生成并写入文件；可用 focus 聚焦主题或题型。
 - 用户想被系统讲解、带着复习某个主题（「教我X」「带我过一遍X」「系统学X」）时，调用 start_teaching 进入四步教学法。
-- 用户想导入/解析/重新索引资料时，调用 ingest_materials。
-- 用户想看有哪些文件、读某个文件、在资料里搜关键词、或换到别的课程文件夹时，分别用 list_files / read_file / grep_materials / switch_workspace。
-- 用户想了解资料/产物/记忆状态时调用 show_status；想检查冲突时调用 lint_conflicts。
-- 只是概念讲解、答疑、讨论时，直接用中文回答，不要调用工具。
-- 调用工具后，用一两句话说明你做了什么、产物在哪，不要重复整篇内容。
+- 导入/解析/重新索引资料用 ingest_materials；看有哪些文件、读文件、搜关键词、换课程文件夹分别用 list_files / read_file / grep_materials / switch_workspace；看状态用 show_status；查冲突用 lint_conflicts。
+- 只是概念讲解、答疑、讨论时直接用中文回答，不要调用工具。
+- 调用工具后用一两句话说明你做了什么、产物在哪，不要重复整篇内容。
 
 回答规则：
 - 用中文，结构清晰，适合考前快速复习。
-- 如果下方提供了课程资料片段，优先基于资料，并用方括号引用来源标签。
-- 不要编造不存在的资料来源或页码。
+- 用到资料处用方括号标注来源标签，例如 [a.pdf:mineru:1]；不要编造来源或页码。
 """
+        memory_text = self.memory.load_boot_summary().strip()
+        if memory_text:
+            prompt += f"\n## 长期记忆\n{memory_text}\n"
+        prompt += f"\n## 当前工作区\n{self._workspace_map()}\n"
+        return prompt
+
+    def _workspace_map(self, *, limit: int = 40) -> str:
+        sources = discover_workspace_sources(self.workspace.root)
+        outputs = sorted(
+            (path for path in self.workspace.output_dir.rglob("*") if path.is_file()),
+            key=lambda path: path.as_posix().lower(),
+        )
+        indexed = workspace_chunks_path(self.workspace).exists()
+        lines = [
+            f"课程：{self.workspace.course_name}（{self.workspace.root}）",
+            f"资料索引：{'已建立' if indexed else '未建立（可让我 ingest_materials）'}",
+        ]
+        if sources:
+            shown = "、".join(source.relative_path.as_posix() for source in sources[:limit])
+            more = "" if len(sources) <= limit else f" 等共 {len(sources)} 个"
+            lines.append(f"资料文件（{len(sources)}）：{shown}{more}")
+        else:
+            lines.append("资料文件：无（把 PDF/PPT/图片/笔记放进来再 ingest）")
+        if outputs:
+            shown = "、".join(path.relative_to(self.workspace.root).as_posix() for path in outputs[:limit])
+            lines.append(f"已生成产物（{len(outputs)}）：{shown}")
+        return "\n".join(lines)
+
+    def _history_messages(self, *, exclude_last_user: str | None = None) -> list[dict]:
+        events = self.memory.load_recent_session_events(limit=HISTORY_TURNS * 2)
+        # run_turn/stream log the current user message before assembling context; drop that
+        # trailing echo so we don't duplicate it (it's re-added as the volatile tail).
+        if (
+            exclude_last_user is not None
+            and events
+            and events[-1].get("role") == "user"
+            and events[-1].get("content") == exclude_last_user
+        ):
+            events = events[:-1]
+        messages: list[dict] = []
+        for event in events:
+            content = event.get("content", "")
+            if not content:
+                continue
+            role = "assistant" if event.get("role") == "agent" else "user"
+            messages.append({"role": role, "content": content})
+        return messages
+
+    def _current_user_message(self, message: str) -> dict:
+        # Volatile tail: per-turn retrieval rides with the latest user message, after the stable
+        # prefix and the append-only history, so it never breaks the prompt cache.
         evidence = search_workspace_chunks(self.workspace, message, limit=5)
         if evidence:
-            evidence_block = "\n\n".join(
-                f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence
-            )
-            system_prompt += f"\n课程资料片段：\n\n{evidence_block}\n"
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message},
-        ]
+            block = "\n\n".join(f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence)
+            return {"role": "user", "content": f"{message}\n\n[本轮可参考的课程资料]\n{block}"}
+        return {"role": "user", "content": message}
+
+    def _agent_messages(self, message: str) -> list[dict]:
+        messages = [{"role": "system", "content": self._system_prompt()}]
+        messages.extend(self._history_messages(exclude_last_user=message))
+        messages.append(self._current_user_message(message))
+        return messages
 
     def _llm_messages(self, message: str) -> list[dict]:
-        system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent。
-
-当前课程文件夹：{self.workspace.course_name}
-
-回答规则：
-- 先帮助用户理解概念、考点和易错点。
-- 用中文回答，结构清晰，适合考前快速复习。
-- 如果下方提供了课程资料片段，优先基于资料回答，并用方括号引用来源标签。
-- 如果没有检索到课程资料，明确建议先运行 /ingest。
-- 不要编造不存在的资料来源或页码。
-"""
-        evidence = search_workspace_chunks(self.workspace, message, limit=5)
-        if evidence:
-            evidence_block = "\n\n".join(
-                f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence
-            )
-            system_prompt += (
-                "\nIndexed course references are available below. "
-                "Prefer them over memory and cite labels in square brackets.\n\n"
-                f"{evidence_block}\n"
-            )
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.append({"role": "user", "content": message})
+        # Same cache-friendly layout as the agent path: stable system prefix + replayed history
+        # + a volatile tail (current message with this turn's retrieval).
+        messages = [{"role": "system", "content": self._system_prompt()}]
+        messages.extend(self._history_messages(exclude_last_user=message))
+        messages.append(self._current_user_message(message))
         return messages
 
     def _lint(self) -> CommandResult:
