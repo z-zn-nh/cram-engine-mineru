@@ -14,6 +14,7 @@ from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScr
 from textual.theme import Theme
 from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
+from textual.worker import get_current_worker
 
 from .commands import CommandRouter
 from .llm import LLMRequestError, fetch_models
@@ -154,15 +155,25 @@ class CramTuiApp(App):
         margin-bottom: 1;
     }
 
-    .message-role {
-        width: 100%;
-        height: auto;
-        margin-top: 1;
-    }
-
     .message-body {
         width: 100%;
         height: auto;
+        color: #eeeeee;
+    }
+
+    .user-msg {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        padding-left: 1;
+        border-left: thick #5c9cf5;
+        color: #9aa0a6;
+    }
+
+    .wrote-msg {
+        width: 100%;
+        height: auto;
+        color: #9d7cd8;
     }
 
     .message-think {
@@ -345,15 +356,21 @@ class CramTuiApp(App):
         margin-bottom: 1;
     }
 
-    #prompt-status {
-        width: 12;
+    #send-btn {
+        width: 6;
+        min-width: 6;
         height: 3;
         margin-left: 1;
         margin-right: 2;
-        content-align: center middle;
-        text-align: center;
         background: #1e1e1e;
-        color: #808080;
+        color: #fab283;
+        border: none;
+        text-style: bold;
+    }
+
+    #send-btn:hover {
+        background: #2a2a2a;
+        color: #ffc09f;
     }
 
     #hints {
@@ -390,6 +407,8 @@ class CramTuiApp(App):
         self._wrote_paths: list[Path] = []
         self._thinking: dict | None = None
         self._menu_commands: list[str] = []
+        self._generating = False
+        self._active_worker = None
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status")
@@ -418,7 +437,7 @@ class CramTuiApp(App):
         yield OptionList(id="command-menu", classes="hidden")
         with Horizontal(id="prompt-row", classes="hidden"):
             yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="session-prompt")
-            yield Static("○ 就绪", id="prompt-status")
+            yield Button("↑", id="send-btn")
         yield Static(self._hint_text(), id="hints")
 
     def on_mount(self) -> None:
@@ -535,6 +554,25 @@ class CramTuiApp(App):
             self._trigger_fetch_models()
         elif event.button.id == "setup-save":
             self._save_llm_setup()
+        elif event.button.id == "send-btn":
+            if self._generating:
+                self._stop_generation()
+            else:
+                self._submit_session_prompt()
+
+    def _submit_session_prompt(self) -> None:
+        prompt = self.query_one("#session-prompt", Input)
+        text = prompt.value.strip()
+        if not text:
+            return
+        prompt.value = ""
+        self._hide_command_menu()
+        self._handle_prompt(text)
+
+    def _stop_generation(self) -> None:
+        worker = self._active_worker
+        if worker is not None:
+            worker.cancel()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "command-menu":
@@ -571,19 +609,19 @@ class CramTuiApp(App):
             self._enter_session()
             self._write_user(text)
             pending = self._write_agent("正在处理...")
-            self._set_prompt_status("● 处理中", PALETTE["primary"])
-            self._run_command_worker(text, pending.id or "")
+            self._set_send_button(busy=True)
+            self._active_worker = self._run_command_worker(text, pending.id or "")
             return
 
         self._enter_session()
         self._write_user(text)
+        self._set_send_button(busy=True)
         if hasattr(self.router, "run_turn"):
             ids = self._write_agent_stream()
-            self._run_prompt_worker(text, ids)
+            self._active_worker = self._run_prompt_worker(text, ids)
         else:
             pending = self._write_agent("thinking…")
-            self._set_prompt_status("● 处理中", PALETTE["primary"])
-            self._run_blocking_worker(text, pending.id or "")
+            self._active_worker = self._run_blocking_worker(text, pending.id or "")
 
     @work(exclusive=False, thread=True)
     def _run_command_worker(self, text: str, message_id: str) -> None:
@@ -595,6 +633,7 @@ class CramTuiApp(App):
 
     @work(exclusive=False, thread=True)
     def _run_prompt_worker(self, text: str, ids: dict) -> None:
+        worker = get_current_worker()
         start = time.monotonic()
         self.call_from_thread(self._begin_thinking, ids["think"], start)
         reasoning_parts: list[str] = ["准备上下文，等待模型返回…"]
@@ -605,6 +644,8 @@ class CramTuiApp(App):
         try:
             self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
             for event in self.router.run_turn(text):
+                if worker.is_cancelled:
+                    break
                 if event.kind == "reasoning":
                     if not saw_model_reasoning:
                         saw_model_reasoning = True
@@ -612,7 +653,6 @@ class CramTuiApp(App):
                     reasoning_parts.append(event.text)
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 elif event.kind == "tool":
-                    self.call_from_thread(self._set_prompt_status, "● 调用工具", PALETTE["accent"])
                     reasoning_parts.append(f"\n↪ {event.text}…\n")
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 elif event.kind == "wrote":
@@ -638,6 +678,10 @@ class CramTuiApp(App):
             self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
             if wrote_paths:
                 self.call_from_thread(self._write_wrote, wrote_paths)
+            if worker.is_cancelled:
+                stopped = "".join(content_parts)
+                stopped = (stopped + "\n\n[已停止生成]") if stopped else "[已停止生成]"
+                self.call_from_thread(self._update_message, ids["answer"], stopped)
             self.call_from_thread(self._refresh_after_prompt)
 
     @work(exclusive=False, thread=True)
@@ -659,7 +703,7 @@ class CramTuiApp(App):
         if result.wrote:
             self._write_wrote(result.wrote)
         self.query_one("#status", Static).update(self._status_text())
-        self._set_prompt_status("○ 就绪")
+        self._set_send_button(busy=False)
         self._focus_session_prompt()
 
     def _focus_session_prompt(self) -> None:
@@ -667,12 +711,13 @@ class CramTuiApp(App):
 
     def _refresh_after_prompt(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
-        self._set_prompt_status("○ 就绪")
+        self._set_send_button(busy=False)
         self._focus_session_prompt()
 
-    def _set_prompt_status(self, label: str, color: str = PALETTE["muted"]) -> None:
+    def _set_send_button(self, *, busy: bool) -> None:
+        self._generating = busy
         try:
-            self.query_one("#prompt-status", Static).update(f"[{color}]{label}[/{color}]")
+            self.query_one("#send-btn", Button).label = "●" if busy else "↑"
         except Exception:
             pass
 
@@ -686,7 +731,11 @@ class CramTuiApp(App):
         self.query_one("#status", Static).update(self._status_text())
 
     def _write_user(self, text: str) -> None:
-        self._append_message("you", text, color=PALETTE["secondary"])
+        self._message_index += 1
+        self.query_one("#chat", VerticalScroll).mount(
+            Static(Text(text), id=f"message-{self._message_index}", classes="message user-msg")
+        )
+        self._scroll_chat_to_bottom()
 
     def _write_agent(self, text: str) -> Static:
         return self._append_message("cram", text, color=PALETTE["primary"])
@@ -695,11 +744,10 @@ class CramTuiApp(App):
         self._message_index += 1
         index = self._message_index
         container = Vertical(
-            Static(f"[bold {PALETTE['primary']}]▌ cram[/bold {PALETTE['primary']}]", classes="message-role"),
             Static("", id=f"think-{index}", classes="message-think"),
             Static(Text(""), id=f"reason-{index}", classes="message-reason hidden"),
             Static(Text(""), id=f"message-{index}", classes="message-body"),
-            classes="message",
+            classes="message agent-msg",
         )
         self.query_one("#chat", VerticalScroll).mount(container)
         self._scroll_chat_to_bottom()
@@ -708,7 +756,6 @@ class CramTuiApp(App):
     def _begin_thinking(self, think_id: str, start: float) -> None:
         self._thinking = {"id": think_id, "start": start, "active": True}
         self.query_one(f"#{think_id}", Static).update("[#808080]● 思考中… 0s[/#808080]")
-        self._set_prompt_status("● 思考中", PALETTE["primary"])
         self._think_timer.resume()
 
     def _tick_thinking(self) -> None:
@@ -754,8 +801,8 @@ class CramTuiApp(App):
             index = len(self._wrote_paths)
             self._wrote_paths.append(path.resolve())
             rel = escape(path.relative_to(self.workspace.root).as_posix())
-            links.append(f"  [@click=open_artifact({index})][u]{rel}[/u][/]")
-        self._append_message("wrote", "\n".join(links), color=PALETTE["accent"], markup=True)
+            links.append(f"  ↳ [@click=open_artifact({index})][u]{rel}[/u][/]")
+        self._append_message("wrote", "\n".join(links), color=PALETTE["accent"], markup=True, css_class="wrote-msg")
 
     def action_open_artifact(self, index: int) -> None:
         if 0 <= index < len(self._wrote_paths):
@@ -768,19 +815,15 @@ class CramTuiApp(App):
     def _write_system(self, text: str) -> None:
         self._append_message("cram", text, color=PALETTE["accent"])
 
-    def _append_message(self, role: str, text: str, *, color: str, markup: bool = False) -> Static:
+    def _append_message(self, role: str, text: str, *, color: str, markup: bool = False, css_class: str = "") -> Static:
         self._message_index += 1
+        classes = f"message {css_class}" if css_class else "message message-body"
         body = Static(
             text if markup else Text(text),
             id=f"message-{self._message_index}",
-            classes="message-body",
+            classes=classes,
         )
-        container = Vertical(
-            Static(f"[bold {color}]▌ {role}[/bold {color}]", classes="message-role"),
-            body,
-            classes="message",
-        )
-        self.query_one("#chat", VerticalScroll).mount(container)
+        self.query_one("#chat", VerticalScroll).mount(body)
         self._scroll_chat_to_bottom()
         return body
 

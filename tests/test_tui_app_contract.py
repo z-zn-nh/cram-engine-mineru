@@ -640,7 +640,7 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertEqual(name, "数字电路")
         self.assertIn("数字电路", status)
 
-    def test_prompt_status_indicator_present_and_updates(self):
+    def test_send_button_toggles_between_send_and_stop(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 
         async def run():
@@ -654,15 +654,19 @@ class TuiAppContractTests(unittest.TestCase):
                     app = module.CramTuiApp(Path(tmp) / "通信原理")
                     async with app.run_test(size=(100, 30)) as pilot:
                         await pilot.pause()
-                        status = app.query_one("#prompt-status")
-                        initial = str(status.content)
-                        app._set_prompt_status("● 思考中", "#fab283")
-                        await pilot.pause()
-                        return initial, str(status.content)
+                        from textual.widgets import Button
 
-        initial, working = asyncio.run(run())
-        self.assertIn("就绪", initial)
-        self.assertIn("思考中", working)
+                        button = app.query_one("#send-btn", Button)
+                        idle = str(button.label)
+                        app._set_send_button(busy=True)
+                        await pilot.pause()
+                        busy = str(button.label)
+                        return idle, busy, app._generating
+
+        idle, busy, generating = asyncio.run(run())
+        self.assertIn("↑", idle)
+        self.assertIn("●", busy)
+        self.assertTrue(generating)
 
 
 if __name__ == "__main__":
