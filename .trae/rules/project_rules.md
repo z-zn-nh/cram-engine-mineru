@@ -1,5 +1,5 @@
 ---
-description: 当用户上传课程资料并输入“期末速成：课程名”，或提到期末速成、期末复习、考试冲刺、考前突击、快速备考时，激活期末速成引擎 MinerU 自用版
+description: 当用户在本地课程文件夹中使用 cram-engine-mineru，或提到期末速成、期末复习、考试冲刺、考前突击、快速备考时，激活期末速成引擎 MinerU 自用版规则。
 alwaysApply: false
 ---
 
@@ -10,24 +10,35 @@ alwaysApply: false
 当检测到用户需要期末速成时，自动激活 `cram-engine-mineru` skill。
 
 如果 skill 未自动激活，手动引导用户：
-"检测到你需要期末速成。请上传 PDF、PPT/PPTX 或图片资料，然后输入：期末速成：课程名。"
+
+```text
+请把 PDF、PPT/PPTX、图片或笔记放进一个课程文件夹，在该文件夹里运行 cram，然后使用 /ingest 扫描资料。
+```
+
+## 主入口
+
+- 当前主线是 OpenCode 风格 TUI，不是旧 GUI/Tauri app。
+- 当前文件夹就是学科工作区，不再要求用户创建远端数据库或 GUI 学科。
+- 可复用输出写入 `cram-output/`。
+- 长期记忆、会话、索引、缓存和冲突记录写入 `.cram/`。
 
 ## 适用课程类型
 
-- ✅ 所有文科：文史哲、法学、教育学、新闻传播、社会学、政治学、经管类
-- ✅ 考试以理解和论述为主的课程
-- ❌ 纯定量课不适用：高等数学、概率论、计量经济学
-
-## 引擎文件位置
-
-- 阶段指令：`stages/stage1-deconstruct.md` → `stage2-teach.md` → `stage3-test.md` → `stage4-remediate.md`
-- 配置模板：`configs/example.yaml`
-- 资料摄取：`scripts/ingest_materials.py`，默认使用 MinerU
-- 资料存储：`~/.cram-engine/materials/<课程名>/`
-- 进度存储：`~/.cram-engine/`
+- 适合：文史哲、法学、教育学、新闻传播、社会学、政治学、经管类，以及考试以理解、论述、简答、案例分析为主的课程。
+- 有条件适合：带公式或图示的课程，需要先通过 MinerU/OCR 解析资料，再以资料引用为依据复习。
+- 不作为主目标：纯定量刷题型课程，例如高等数学、概率论、计量经济学。
 
 ## 资料处理规则
 
-- 支持 PDF、PPT/PPTX、图片、txt、md 和资料文件夹
-- PPT/PPTX 优先由 MinerU 原生解析，失败后才用 LibreOffice 转 PDF
-- 图片、扫描 PDF、公式截图优先由 MinerU 处理，必要时提示用户安装 Pix2Text 或 pix2tex 兜底
+- 支持 PDF、PPT/PPTX、图片、txt、md 和资料文件夹。
+- md/txt 直接索引。
+- PDF、图片、PPT/PPTX 优先由 MinerU 解析。
+- PPT/PPTX 如果 MinerU 原生解析失败，再用 LibreOffice/`soffice` 转 PDF 兜底。
+- 图片、扫描 PDF、公式截图优先由 MinerU 处理，必要时提示用户安装 Pix2Text 或 pix2tex 兜底。
+
+## 引用与准确率
+
+- 原始资料优先级最高，生成产物优先级最低。
+- 输出内容可以作为后续引用，但必须标记为生成产物。
+- 如果结论只来自 `.cram` 记忆或 `cram-output/`，必须说明不是原始资料出处。
+- 使用 `/lint` 或等价检查识别原始资料、长期记忆和生成产物之间的冲突。

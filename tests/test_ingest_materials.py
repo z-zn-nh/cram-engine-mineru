@@ -13,6 +13,18 @@ from scripts.ingest_materials import (
 
 
 class IngestMaterialsTests(unittest.TestCase):
+    def test_convert_ppt_to_pdf_script_uses_libreoffice(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "convert-ppt-to-pdf.ps1"
+
+        self.assertTrue(script.is_file())
+        content = script.read_text(encoding="utf-8")
+        self.assertIn("param(", content)
+        self.assertIn("--headless", content)
+        self.assertIn("--convert-to", content)
+        self.assertIn("pdf", content)
+        self.assertIn("--outdir", content)
+        self.assertIn("soffice", content)
+
     def test_discovers_supported_materials_recursively(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp) / "course"

@@ -50,13 +50,15 @@ description: 期末速成引擎 MinerU 自用版。Use when the user has a local
 ```text
 /help      查看命令
 /status    查看资料、输出、引用、记忆状态
-/ingest    扫描当前文件夹资料，md/txt 直接索引，PDF/图片调用 MinerU 解析后索引
+/ingest    扫描当前文件夹资料，md/txt 直接索引，PDF/图片/PPT 调用 MinerU 解析，PPT 失败时可用 LibreOffice 转 PDF 兜底
 /plan      生成 cram-output/速成计划.md
 /notes     生成 cram-output/知识点整合.md
 /mindmap   生成 cram-output/思维导图.md
 /quiz      生成 cram-output/题库.md
 /summary   生成 cram-output/考前总结.md
 /lint      检查原始资料、长期记忆和输出产物之间的矛盾
+/config    重新配置 LLM
+/model     切换对话模型
 ```
 
 自然语言输入就是复习提问。

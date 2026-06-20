@@ -267,7 +267,8 @@ class CommandRouter:
 回答规则：
 - 先帮助用户理解概念、考点和易错点。
 - 用中文回答，结构清晰，适合考前快速复习。
-- 当前阶段还没有接入资料检索；如果需要引用课程资料，明确说明需要先运行 /ingest。
+- 如果下方提供了课程资料片段，优先基于资料回答，并用方括号引用来源标签。
+- 如果没有检索到课程资料，明确建议先运行 /ingest。
 - 不要编造不存在的资料来源或页码。
 """
         evidence = search_workspace_chunks(self.workspace, message, limit=5)

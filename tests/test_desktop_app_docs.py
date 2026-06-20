@@ -22,8 +22,12 @@ class DesktopAppDocsTests(unittest.TestCase):
         opencode = (ROOT / ".opencode" / "skills" / "cram-engine-mineru" / "SKILL.md").read_text(
             encoding="utf-8"
         )
+        trae_skill = (ROOT / ".trae" / "skills" / "cram-engine" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        trae_rules = (ROOT / ".trae" / "rules" / "project_rules.md").read_text(encoding="utf-8")
 
-        for document in (agents, skill, opencode):
+        for document in (agents, skill, opencode, trae_skill, trae_rules):
             self.assertIn("OpenCode 风格 TUI", document)
             self.assertIn("当前文件夹", document)
             self.assertIn("长期记忆", document)

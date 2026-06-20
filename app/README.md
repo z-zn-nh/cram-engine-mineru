@@ -26,7 +26,7 @@ cram-output/    # 速成计划、笔记、思维导图、题库、考前总结
 
 1. 把 PDF、PPT/PPTX、图片、md/txt 笔记放进当前文件夹
 2. 启动 OpenCode 风格 TUI
-3. 输入 `/ingest` 扫描资料：md/txt 直接索引，PDF/图片通过 MinerU 解析后索引，PPT/PPTX 暂时进入 pending
+3. 输入 `/ingest` 扫描资料：md/txt 直接索引，PDF/图片/PPT 通过 MinerU 解析后索引，PPT/PPTX 失败时可用 LibreOffice 转 PDF 兜底
 4. 直接对话复习，或使用 `/plan`、`/notes`、`/mindmap`、`/quiz`、`/summary`
 5. 使用 `/lint` 检查长期记忆、输出产物和引用之间的冲突
 

@@ -122,6 +122,7 @@ class CramTuiApp(App):
     Screen {
         background: #0a0a0a;
         color: #eeeeee;
+        layers: base overlay;
     }
 
     #status {
@@ -178,10 +179,11 @@ class CramTuiApp(App):
     }
 
     #command-menu {
+        layer: overlay;
         dock: bottom;
         height: auto;
-        max-height: 6;
-        margin: 0 2 0 2;
+        max-height: 11;
+        margin: 0 2 4 2;
         background: #141414;
         color: #eeeeee;
         border: none;
@@ -424,7 +426,7 @@ class CramTuiApp(App):
         if event.input.id == "setup-model":
             self._save_llm_setup()
             return
-        if event.input.id == "session-prompt" and self._command_menu_visible():
+        if event.input.id in {"home-prompt", "session-prompt"} and self._command_menu_visible():
             self._run_highlighted_command()
             return
         text = event.value.strip()
@@ -432,26 +434,22 @@ class CramTuiApp(App):
         self._handle_prompt(text)
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id != "session-prompt":
+        if event.input.id not in {"home-prompt", "session-prompt"}:
             return
+        if self._session_started:
+            self._scroll_chat_to_bottom()
         value = event.value
-        menu = self.query_one("#command-menu", OptionList)
-        if value.startswith("/") and " " not in value:
-            matches = [(c, d) for c, d in PALETTE_COMMANDS if c.startswith(value.lower())]
-            if matches:
-                self._menu_commands = [command for command, _ in matches]
-                menu.clear_options()
-                menu.add_options([Option(f"{command}  {description}") for command, description in matches])
-                menu.remove_class("hidden")
-                menu.highlighted = 0
-                return
+        matches = self._filtered_commands(value)
+        if matches:
+            self._show_command_menu(matches)
+            return
         self._hide_command_menu()
 
     def on_key(self, event) -> None:
         if not self._command_menu_visible():
             return
         focused = self.focused
-        if focused is None or getattr(focused, "id", None) != "session-prompt":
+        if focused is None or getattr(focused, "id", None) not in {"home-prompt", "session-prompt"}:
             return
         menu = self.query_one("#command-menu", OptionList)
         if event.key == "down":
@@ -474,12 +472,42 @@ class CramTuiApp(App):
         self._menu_commands = []
         self.query_one("#command-menu", OptionList).add_class("hidden")
 
+    def _filtered_commands(self, value: str) -> list[tuple[str, str]]:
+        if not value.startswith("/") or " " in value:
+            return []
+        query = value[1:].strip().lower()
+        if not query:
+            return PALETTE_COMMANDS
+        command_matches = [
+            (command, description)
+            for command, description in PALETTE_COMMANDS
+            if command.lstrip("/").lower().startswith(query)
+        ]
+        if command_matches:
+            return command_matches
+        return [
+            (command, description)
+            for command, description in PALETTE_COMMANDS
+            if query in description.lower()
+        ]
+
+    def _show_command_menu(self, matches: list[tuple[str, str]]) -> None:
+        menu = self.query_one("#command-menu", OptionList)
+        self._menu_commands = [command for command, _ in matches]
+        menu.clear_options()
+        menu.add_options([Option(f"{command:<10} {description}") for command, description in matches])
+        menu.remove_class("hidden")
+        menu.highlighted = 0
+        menu.refresh(layout=True)
+
     def _run_highlighted_command(self) -> None:
         menu = self.query_one("#command-menu", OptionList)
         index = menu.highlighted or 0
         if 0 <= index < len(self._menu_commands):
             command = self._menu_commands[index]
-            self.query_one("#session-prompt", Input).value = ""
+            focused = self.focused
+            if focused is not None and getattr(focused, "id", None) in {"home-prompt", "session-prompt"}:
+                focused.value = ""
             self._hide_command_menu()
             self._handle_prompt(command)
 
@@ -493,7 +521,9 @@ class CramTuiApp(App):
         if event.option_list.id == "command-menu":
             if 0 <= event.option_index < len(self._menu_commands):
                 command = self._menu_commands[event.option_index]
-                self.query_one("#session-prompt", Input).value = ""
+                focused = self.focused
+                if focused is not None and getattr(focused, "id", None) in {"home-prompt", "session-prompt"}:
+                    focused.value = ""
                 self._hide_command_menu()
                 self._handle_prompt(command)
             return
@@ -546,25 +576,36 @@ class CramTuiApp(App):
     def _run_prompt_worker(self, text: str, ids: dict) -> None:
         start = time.monotonic()
         self.call_from_thread(self._begin_thinking, ids["think"], start)
-        reasoning_parts: list[str] = []
+        reasoning_parts: list[str] = ["准备上下文，等待模型返回…"]
         content_parts: list[str] = []
         first_content = False
+        saw_model_reasoning = False
         try:
+            self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
             for event in self.router.stream(text):
                 if event.kind == "reasoning":
+                    if not saw_model_reasoning:
+                        saw_model_reasoning = True
+                        reasoning_parts.append("\n模型返回的思考内容：\n")
                     reasoning_parts.append(event.text)
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 else:
                     if not first_content:
                         first_content = True
-                        self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start)
+                        self.call_from_thread(
+                            self._end_thinking,
+                            ids["think"],
+                            time.monotonic() - start,
+                            ids["reason"],
+                            ids["index"],
+                        )
                     content_parts.append(event.text)
                     self.call_from_thread(self._update_message, ids["answer"], "".join(content_parts))
         except Exception as exc:
-            self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start)
+            self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
             self.call_from_thread(self._update_message, ids["answer"], f"LLM 请求失败，当前会话已保留。\n{exc}")
         finally:
-            self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start)
+            self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
             self.call_from_thread(self._refresh_after_prompt)
 
     @work(exclusive=False, thread=True)
@@ -611,14 +652,13 @@ class CramTuiApp(App):
             Static(Text(""), id=f"message-{index}", classes="message-body"),
             classes="message",
         )
-        chat = self.query_one("#chat", VerticalScroll)
-        chat.mount(container)
-        chat.scroll_end(animate=False, immediate=True)
-        return {"think": f"think-{index}", "reason": f"reason-{index}", "answer": f"message-{index}"}
+        self.query_one("#chat", VerticalScroll).mount(container)
+        self._scroll_chat_to_bottom()
+        return {"index": index, "think": f"think-{index}", "reason": f"reason-{index}", "answer": f"message-{index}"}
 
     def _begin_thinking(self, think_id: str, start: float) -> None:
         self._thinking = {"id": think_id, "start": start, "active": True}
-        self.query_one(f"#{think_id}", Static).update("[#808080]● 思考中… 0.0s[/#808080]")
+        self.query_one(f"#{think_id}", Static).update("[#808080]● 思考中… 0s[/#808080]")
         self._think_timer.resume()
 
     def _tick_thinking(self) -> None:
@@ -627,18 +667,28 @@ class CramTuiApp(App):
         elapsed = time.monotonic() - self._thinking["start"]
         try:
             self.query_one(f"#{self._thinking['id']}", Static).update(
-                f"[#808080]● 思考中… {elapsed:.1f}s[/#808080]"
+                f"[#808080]● 思考中… {elapsed:.0f}s[/#808080]"
             )
         except Exception:
             pass
 
-    def _end_thinking(self, think_id: str, seconds: float) -> None:
+    def _end_thinking(self, think_id: str, seconds: float, reason_id: str | None = None, index: int | None = None) -> None:
         if not (self._thinking and self._thinking.get("id") == think_id and self._thinking.get("active")):
             return
         self._thinking["active"] = False
         self._think_timer.pause()
+        seconds_text = f"{seconds:.0f}s"
+        has_reasoning = False
+        if reason_id:
+            try:
+                reason = self.query_one(f"#{reason_id}", Static)
+                has_reasoning = bool(str(reason.content).strip())
+                if has_reasoning:
+                    reason.add_class("hidden")
+            except Exception:
+                has_reasoning = False
         try:
-            self.query_one(f"#{think_id}", Static).update(f"[#7fd88f]✓ 思考 {seconds:.1f}s[/#7fd88f]")
+            self.query_one(f"#{think_id}", Static).update(f"[#7fd88f]✓ 思考 {seconds_text}[/#7fd88f]")
         except Exception:
             pass
 
@@ -646,7 +696,7 @@ class CramTuiApp(App):
         widget = self.query_one(f"#{reason_id}", Static)
         widget.remove_class("hidden")
         widget.update(Text(text, style="#808080"))
-        self.query_one("#chat", VerticalScroll).scroll_end(animate=False, immediate=True)
+        self._scroll_chat_to_bottom()
 
     def _write_wrote(self, paths: list[Path]) -> None:
         links: list[str] = []
@@ -680,16 +730,30 @@ class CramTuiApp(App):
             body,
             classes="message",
         )
-        chat = self.query_one("#chat", VerticalScroll)
-        chat.mount(container)
-        chat.scroll_end(animate=False, immediate=True)
+        self.query_one("#chat", VerticalScroll).mount(container)
+        self._scroll_chat_to_bottom()
         return body
 
     def _update_message(self, message_id: str, text: str) -> None:
         if not message_id:
             return
         self.query_one(f"#{message_id}", Static).update(Text(text))
-        self.query_one("#chat", VerticalScroll).scroll_end(animate=False, immediate=True)
+        self._scroll_chat_to_bottom()
+
+    def _scroll_chat_to_bottom(self) -> None:
+        try:
+            chat = self.query_one("#chat", VerticalScroll)
+        except Exception:
+            return
+
+        def scroll() -> None:
+            try:
+                chat.scroll_end(animate=False, immediate=True)
+            except Exception:
+                pass
+
+        scroll()
+        self.call_after_refresh(scroll)
 
     def _trigger_fetch_models(self) -> None:
         api_key = self.query_one("#setup-api-key", Input).value.strip()

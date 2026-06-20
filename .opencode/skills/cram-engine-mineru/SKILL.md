@@ -41,6 +41,8 @@ Generated outputs are indexed as low-priority references. Raw course materials a
 /quiz
 /summary
 /lint
+/config
+/model
 ```
 
 Free-form text is a study question.

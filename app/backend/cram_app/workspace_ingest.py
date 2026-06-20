@@ -10,8 +10,9 @@ from .workspace import CramWorkspace, WorkspaceSource
 from .workspace_index import ParsedTextSource
 
 
-MINERU_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"}
-PENDING_EXTENSIONS = {".ppt", ".pptx", ".webp", ".bmp", ".gif"}
+PPT_EXTENSIONS = {".ppt", ".pptx"}
+MINERU_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg"} | PPT_EXTENSIONS
+PENDING_EXTENSIONS = {".webp", ".bmp", ".gif"}
 
 
 @dataclass(frozen=True)
@@ -27,9 +28,11 @@ def ingest_material_sources(
     sources: list[WorkspaceSource],
     *,
     mineru_bin: str | None = None,
+    libreoffice_bin: str | None = None,
     timeout: int = 600,
 ) -> MaterialIngestResult:
     mineru = mineru_bin or os.environ.get("CRAM_MINERU_BIN", "mineru")
+    libreoffice = libreoffice_bin or os.environ.get("CRAM_LIBREOFFICE_BIN", "soffice")
     parsed_texts: list[ParsedTextSource] = []
     failed: list[str] = []
     pending: list[str] = []
@@ -61,12 +64,19 @@ def ingest_material_sources(
             )
             continue
 
-        command = [mineru, "-p", str(source.path), "-o", str(output_dir)]
-        completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
-        if completed.returncode != 0:
-            failed.append(relative)
-            continue
-        markdown_files = sorted(output_dir.rglob("*.md"), key=lambda path: path.as_posix().lower())
+        markdown_files = _run_mineru(mineru, source.path, output_dir, timeout=timeout)
+        if not markdown_files and suffix in PPT_EXTENSIONS:
+            if shutil.which(libreoffice) is None:
+                pending.append(relative)
+                continue
+            markdown_files = _run_ppt_pdf_fallback(
+                source.path,
+                output_dir,
+                workspace.cram_dir / "converted" / _parsed_dir_name(source.relative_path),
+                mineru_bin=mineru,
+                libreoffice_bin=libreoffice,
+                timeout=timeout,
+            )
         if not markdown_files:
             failed.append(relative)
             continue
@@ -96,3 +106,42 @@ def _fresh_markdown_files(output_dir: Path, source: Path) -> list[Path]:
     if all(path.stat().st_mtime >= source_mtime for path in markdown_files):
         return markdown_files
     return []
+
+
+def _run_mineru(mineru: str, source: Path, output_dir: Path, *, timeout: int) -> list[Path]:
+    command = [mineru, "-p", str(source), "-o", str(output_dir)]
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+    if completed.returncode != 0:
+        return []
+    return sorted(output_dir.rglob("*.md"), key=lambda path: path.as_posix().lower())
+
+
+def _run_ppt_pdf_fallback(
+    source: Path,
+    output_dir: Path,
+    fallback_dir: Path,
+    *,
+    mineru_bin: str,
+    libreoffice_bin: str,
+    timeout: int,
+) -> list[Path]:
+    fallback_dir.mkdir(parents=True, exist_ok=True)
+    command = [
+        libreoffice_bin,
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(fallback_dir),
+        str(source),
+    ]
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
+    if completed.returncode != 0:
+        return []
+    pdf_path = fallback_dir / f"{source.stem}.pdf"
+    if not pdf_path.exists():
+        converted = sorted(fallback_dir.glob("*.pdf"), key=lambda path: path.as_posix().lower())
+        if not converted:
+            return []
+        pdf_path = converted[0]
+    return _run_mineru(mineru_bin, pdf_path, output_dir, timeout=timeout)

@@ -7,9 +7,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from textual.containers import VerticalScroll
 from textual.widgets import Input
 
 from app.backend.cram_app.commands import CommandResult
+from app.backend.cram_app.llm import StreamEvent
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -430,6 +432,166 @@ class TuiAppContractTests(unittest.TestCase):
         visible, commands = asyncio.run(run())
         self.assertTrue(visible)
         self.assertEqual(commands, ["/plan"])
+
+    def test_typing_slash_filters_commands_by_description_and_works_on_home_prompt(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        await pilot.press("/", "生", "成")
+                        await pilot.pause()
+                        menu = app.query_one("#command-menu")
+                        return (not menu.has_class("hidden"), list(app._menu_commands))
+
+        visible, commands = asyncio.run(run())
+        self.assertTrue(visible)
+        self.assertIn("/plan", commands)
+        self.assertIn("/summary", commands)
+        self.assertNotIn("/status", commands)
+
+    def test_command_menu_shows_more_than_six_rows(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+        css = module.CramTuiApp.CSS
+
+        command_menu_css = css.split("#command-menu", 1)[1].split("#home", 1)[0]
+
+        self.assertIn("max-height: 11", command_menu_css)
+
+    def test_enter_on_home_command_menu_runs_highlighted_command(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        class RecordingRouter:
+            def __init__(self):
+                self.seen = []
+
+            def handle(self, text):
+                self.seen.append(text)
+                return CommandResult(kind="status", message="status ok")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    router = RecordingRouter()
+                    app.router = router
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.press("/", "s", "t", "a", "enter")
+                        await pilot.pause(0.1)
+                        return router.seen
+
+        seen = asyncio.run(run())
+
+        self.assertEqual(seen, ["/status"])
+
+    def test_home_prompt_does_not_shift_when_command_menu_opens(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        before = app.query_one("#home-prompt").region
+                        await pilot.press("/")
+                        await pilot.pause()
+                        after = app.query_one("#home-prompt").region
+                        return before, after
+
+        before, after = asyncio.run(run())
+
+        self.assertEqual(before.y, after.y)
+        self.assertEqual(before.height, after.height)
+
+    def test_chat_scrolls_to_bottom_after_long_message_update(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    async with app.run_test(size=(80, 12)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        body = app._append_message("cram", "short", color="#fab283")
+                        await pilot.pause()
+                        chat = app.query_one("#chat", VerticalScroll)
+                        chat.scroll_home(animate=False, immediate=True)
+                        await pilot.pause()
+                        app._update_message(body.id or "", "\n".join(f"line {index}" for index in range(80)))
+                        await pilot.pause()
+                        return chat.scroll_y, chat.max_scroll_y
+
+        scroll_y, max_scroll_y = asyncio.run(run())
+
+        self.assertEqual(scroll_y, max_scroll_y)
+
+    def test_streamed_reasoning_collapses_after_answer_and_uses_whole_seconds(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        class StreamingRouter:
+            def stream(self, text):
+                yield StreamEvent("reasoning", "先定位教材定义")
+                yield StreamEvent("reasoning", "，再合并公式")
+                yield StreamEvent("content", "这是答案")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "course")
+                    app.router = StreamingRouter()
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.press("h", "i", "enter")
+                        await pilot.pause(0.2)
+                        reason = app.query_one(".message-reason")
+                        think = app.query_one(".message-think")
+                        answer = app.query_one("#chat .message:last-child .message-body")
+                        reason_hidden = reason.has_class("hidden")
+                        think_text = str(think.content)
+                        return (
+                            reason_hidden,
+                            str(reason.content),
+                            think_text,
+                            str(answer.content),
+                        )
+
+        reason_hidden, reason_text, think_text, answer_text = asyncio.run(run())
+
+        self.assertTrue(reason_hidden)
+        self.assertIn("先定位教材定义，再合并公式", reason_text)
+        self.assertIn("思考", think_text)
+        self.assertIn("s", think_text)
+        self.assertNotIn(".0s", think_text)
+        self.assertIn("这是答案", answer_text)
 
     def test_written_paths_are_tracked_and_openable(self):
         module = importlib.import_module("app.backend.cram_app.tui")

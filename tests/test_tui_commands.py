@@ -98,6 +98,7 @@ class TuiCommandTests(unittest.TestCase):
             system_content = llm.messages[0]["content"]
             self.assertIn("notes.md:text:1", system_content)
             self.assertIn("Nyquist sampling theorem", system_content)
+            self.assertNotIn("当前阶段还没有接入资料检索", system_content)
 
     def test_generation_command_without_llm_config_does_not_write_file(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -205,6 +206,7 @@ class TuiCommandTests(unittest.TestCase):
             system_content = llm.messages[0]["content"]
             self.assertIn("notes.md:text:1", system_content)
             self.assertIn("Nyquist sampling theorem", system_content)
+            self.assertNotIn("当前阶段还没有接入资料检索", system_content)
 
     def test_free_text_can_stream_llm_chunks(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -37,6 +37,8 @@ The expected first-pass TUI commands are:
 /quiz
 /summary
 /lint
+/config
+/model
 ```
 
 Free-form text is a study question and should be answered with source-grounded citations whenever possible.
