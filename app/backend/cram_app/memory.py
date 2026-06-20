@@ -74,14 +74,45 @@ class MemoryStore:
         return self.session_path
 
     def load_recent_session_events(self, *, limit: int = 20) -> list[dict]:
+        events = self.load_all_session_events()
+        return events[-limit:]
+
+    def load_all_session_events(self) -> list[dict]:
         if not self.session_path.exists():
             return []
-        events = [
+        return [
             json.loads(line)
             for line in self.session_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        return events[-limit:]
+
+    @property
+    def rolling_summary_path(self) -> Path:
+        return self.memory_dir / "rolling_summary.md"
+
+    @property
+    def summary_state_path(self) -> Path:
+        return self.memory_dir / "summary_state.json"
+
+    def load_rolling_summary(self) -> str:
+        if not self.rolling_summary_path.exists():
+            return ""
+        return self.rolling_summary_path.read_text(encoding="utf-8")
+
+    def save_rolling_summary(self, text: str) -> Path:
+        self.rolling_summary_path.write_text(text, encoding="utf-8")
+        return self.rolling_summary_path
+
+    def load_summarized_through(self) -> int:
+        if not self.summary_state_path.exists():
+            return 0
+        try:
+            return int(json.loads(self.summary_state_path.read_text(encoding="utf-8")).get("summarized_through", 0))
+        except (ValueError, OSError):
+            return 0
+
+    def save_summarized_through(self, count: int) -> None:
+        self.summary_state_path.write_text(json.dumps({"summarized_through": count}), encoding="utf-8")
 
     def build_reference_catalog(self) -> list[ReferenceRecord]:
         references: list[ReferenceRecord] = []

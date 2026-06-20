@@ -84,6 +84,8 @@ HELP_TEXT = """可用命令：
 MAX_AGENT_STEPS = 8
 # How many prior conversation turns (user+assistant pairs) to replay into the context window.
 HISTORY_TURNS = 10
+KEEP_EVENTS = HISTORY_TURNS * 2  # most recent events kept verbatim; older ones fold into the summary
+COMPACT_MIN_FOLD = 6  # only summarize once at least this many events have aged out (batches LLM calls)
 
 # Maps a tool name the model can call to the slash-style artifact key it generates.
 TOOL_ARTIFACTS = {
@@ -411,6 +413,7 @@ class CommandRouter:
                 yield StreamEvent("content", result.message)
             return
 
+        self._maybe_compact()
         content_parts: list[str] = []
         try:
             for event in self.llm.stream_chat(self._llm_messages(message)):
@@ -449,6 +452,7 @@ class CommandRouter:
             return
 
         self.memory.append_session_event("user", message)
+        self._maybe_compact()
         messages = self._agent_messages(message)
         answer_parts: list[str] = []
         try:
@@ -903,18 +907,63 @@ class CommandRouter:
         return {"role": "user", "content": message}
 
     def _agent_messages(self, message: str) -> list[dict]:
-        messages = [{"role": "system", "content": self._system_prompt()}]
-        messages.extend(self._history_messages(exclude_last_user=message))
-        messages.append(self._current_user_message(message))
-        return messages
+        return self._assemble_messages(message)
 
     def _llm_messages(self, message: str) -> list[dict]:
         # Same cache-friendly layout as the agent path: stable system prefix + replayed history
         # + a volatile tail (current message with this turn's retrieval).
+        return self._assemble_messages(message)
+
+    def _assemble_messages(self, message: str) -> list[dict]:
         messages = [{"role": "system", "content": self._system_prompt()}]
+        summary = self.memory.load_rolling_summary().strip()
+        if summary:
+            # Volatile region (after the cached prefix): a rolling summary of turns that have
+            # aged out beyond the recent-history window, so older context isn't simply lost.
+            messages.append({"role": "system", "content": f"## 之前对话摘要\n{summary}"})
         messages.extend(self._history_messages(exclude_last_user=message))
         messages.append(self._current_user_message(message))
         return messages
+
+    def _maybe_compact(self) -> None:
+        """Fold turns aged out beyond the recent window into a rolling summary (batched)."""
+        if not hasattr(self.llm, "chat"):
+            return
+        events = self.memory.load_all_session_events()
+        done = self.memory.load_summarized_through()
+        fold_end = len(events) - KEEP_EVENTS
+        if fold_end - done < COMPACT_MIN_FOLD:
+            return
+        to_fold = events[done:fold_end]
+        if not to_fold:
+            return
+        existing = self.memory.load_rolling_summary().strip()
+        try:
+            summary = self.llm.chat(self._summary_messages(existing, to_fold), stream=False)
+        except (LLMConfigurationError, LLMRequestError):
+            return  # graceful: if summarization fails, older turns just drop out as before
+        summary = (summary or "").strip()
+        if summary:
+            self.memory.save_rolling_summary(summary)
+            self.memory.save_summarized_through(fold_end)
+
+    @staticmethod
+    def _summary_messages(existing: str, events: list[dict]) -> list[dict]:
+        convo = "\n".join(
+            f"{'用户' if event.get('role') == 'user' else '助手'}：{event.get('content', '')}"
+            for event in events
+            if event.get("content")
+        )
+        system = (
+            "你在维护一段学习对话的滚动摘要。把【已有摘要】和【新增对话】合并成一份更新后的简洁摘要，"
+            "保留：学过哪些主题、用户的疑问与易错点、已产出的复习材料、达成的结论。"
+            "用中文、分点、控制在 200 字内，不要逐句复述。"
+        )
+        user = f"【已有摘要】\n{existing or '（无）'}\n\n【新增对话】\n{convo}\n\n请输出更新后的完整摘要。"
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
 
     def _lint(self) -> CommandResult:
         conflicts = self.memory.load_conflicts()

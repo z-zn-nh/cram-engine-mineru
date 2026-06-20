@@ -696,5 +696,38 @@ class LongTermMemoryTests(unittest.TestCase):
             self.assertEqual(user_contents.count("当前这句话"), 1)
 
 
+class CompactionTests(unittest.TestCase):
+    def test_compaction_folds_aged_out_turns_into_rolling_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            llm = FakeLLM("摘要：覆盖了前面几轮复习。")
+            router = CommandRouter(workspace, llm=llm)
+            for i in range(15):  # 30 events; 30-20 keep = 10 aged out >= COMPACT_MIN_FOLD
+                router.memory.append_session_event("user", f"问题{i}")
+                router.memory.append_session_event("agent", f"回答{i}")
+
+            router._maybe_compact()
+
+            self.assertIn("摘要", router.memory.load_rolling_summary())
+            self.assertEqual(router.memory.load_summarized_through(), 10)
+            messages = router._assemble_messages("新问题")
+            self.assertTrue(
+                any(m["role"] == "system" and "之前对话摘要" in m["content"] for m in messages)
+            )
+
+    def test_no_compaction_for_short_conversation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM("不该被调用"))
+            for i in range(4):
+                router.memory.append_session_event("user", f"问题{i}")
+                router.memory.append_session_event("agent", f"回答{i}")
+
+            router._maybe_compact()
+
+            self.assertEqual(router.memory.load_rolling_summary(), "")
+            self.assertEqual(router.memory.load_summarized_through(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
