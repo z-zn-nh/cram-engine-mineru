@@ -80,7 +80,7 @@ HELP_TEXT = """可用命令：
 直接输入问题即可继续复习对话。
 """
 
-MAX_AGENT_STEPS = 4
+MAX_AGENT_STEPS = 8
 
 # Maps a tool name the model can call to the slash-style artifact key it generates.
 TOOL_ARTIFACTS = {
@@ -457,23 +457,6 @@ class CommandRouter:
                             continue
                 if not tool_calls:
                     break
-                switch_call = next((c for c in tool_calls if c.get("name") == "switch_workspace"), None)
-                if switch_call is not None:
-                    yield StreamEvent("tool", _TOOL_LABELS["switch_workspace"])
-                    try:
-                        switch_args = json.loads(switch_call.get("arguments") or "{}")
-                    except ValueError:
-                        switch_args = {}
-                    raw_path = switch_args.get("path") if isinstance(switch_args, dict) else None
-                    resolved, error = self._validate_switch_path(raw_path)
-                    if resolved is not None:
-                        yield StreamEvent("switch", str(resolved))
-                        text = f"已切换到课程文件夹：{resolved}"
-                    else:
-                        text = error
-                    answer_parts.append(text)
-                    yield StreamEvent("content", text)
-                    break
                 messages.append(
                     {
                         "role": "assistant",
@@ -483,8 +466,16 @@ class CommandRouter:
                 )
                 direct_text: str | None = None
                 for call in tool_calls:
-                    yield StreamEvent("tool", _TOOL_LABELS.get(call.get("name", ""), call.get("name", "")))
-                    result_text, wrote, present_directly = self._execute_tool(call)
+                    name = call.get("name", "")
+                    yield StreamEvent("tool", _TOOL_LABELS.get(name, name))
+                    if name == "switch_workspace":
+                        result_text, switched = self._apply_switch_workspace(call)
+                        if switched is not None:
+                            yield StreamEvent("switch", str(switched))
+                        wrote: list[Path] = []
+                        present_directly = False
+                    else:
+                        result_text, wrote, present_directly = self._execute_tool(call)
                     for path in wrote:
                         yield StreamEvent("wrote", str(path))
                     if present_directly:
@@ -492,7 +483,7 @@ class CommandRouter:
                     messages.append(
                         {
                             "role": "tool",
-                            "tool_call_id": call.get("id") or call.get("name", ""),
+                            "tool_call_id": call.get("id") or name,
                             "content": result_text,
                         }
                     )
@@ -604,6 +595,16 @@ class CommandRouter:
             return f"{rel_path} 是文件夹，不是文件。用 list_files 查看内容。"
         if target.exists() and target.suffix.lower() in {".md", ".txt"}:
             return self._render_file_text(target, max_chars=max_chars)
+        if target.exists() and target.suffix.lower() == ".pptx":
+            slides = _extract_pptx_text(target)
+            if slides:
+                rel = target.relative_to(self.workspace.root).as_posix()
+                truncated = ""
+                if len(slides) > max_chars:
+                    slides = slides[:max_chars]
+                    truncated = f"\n\n…（已截断，仅显示前 {max_chars} 字）"
+                return f"{rel}（PPTX 文本）：\n\n{slides}{truncated}"
+            # no extractable text (image-only deck) -> fall through to parsed/ingest path
         if target.exists() and target.suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS:
             parsed = self._parsed_markdown_for(target)
             if parsed:
@@ -673,6 +674,23 @@ class CommandRouter:
             key=lambda path: path.as_posix().lower(),
         )
         return files + parsed
+
+    def _apply_switch_workspace(self, call: dict) -> tuple[str, Path | None]:
+        """Switch the running router to another folder in place so the turn can continue."""
+        try:
+            args = json.loads(call.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        raw = args.get("path") if isinstance(args, dict) else None
+        resolved, error = self._validate_switch_path(raw)
+        if resolved is None:
+            return (error, None)
+        self.workspace = CramWorkspace.open(resolved)
+        self.memory = MemoryStore.open(self.workspace)
+        return (
+            f"已切换到课程文件夹：{resolved}。现在可以用 list_files 看里面有什么、用 read_file 读取文件。",
+            resolved,
+        )
 
     def _validate_switch_path(self, raw: str | None) -> tuple[Path | None, str]:
         text = (raw or "").strip().strip('"').strip("'")
@@ -858,6 +876,31 @@ class CommandRouter:
                 f"{conflict_lines}"
             ),
         )
+
+
+def _extract_pptx_text(path: Path) -> str:
+    """Pull slide text from a .pptx quickly via python-pptx (no MinerU). Empty if unavailable."""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return ""
+    try:
+        presentation = Presentation(str(path))
+    except Exception:
+        return ""
+    blocks: list[str] = []
+    for index, slide in enumerate(presentation.slides, start=1):
+        lines: list[str] = []
+        for shape in slide.shapes:
+            if not getattr(shape, "has_text_frame", False):
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                text = "".join(run.text for run in paragraph.runs).strip()
+                if text:
+                    lines.append(text)
+        if lines:
+            blocks.append(f"# 第 {index} 页\n" + "\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 def _default_llm_client() -> LLMClient:

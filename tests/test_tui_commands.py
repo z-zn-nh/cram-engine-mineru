@@ -424,12 +424,38 @@ class FakeSwitchLLM(FakeLLM):
     def __init__(self, target: str):
         super().__init__()
         self.target = target
+        self.calls = 0
 
     def stream_agent(self, messages, tools):
-        yield StreamEvent(
-            "tool_call",
-            json.dumps({"id": "c1", "name": "switch_workspace", "arguments": json.dumps({"path": self.target})}),
-        )
+        self.calls += 1
+        if self.calls == 1:
+            yield StreamEvent(
+                "tool_call",
+                json.dumps({"id": "c1", "name": "switch_workspace", "arguments": json.dumps({"path": self.target})}),
+            )
+        else:
+            yield StreamEvent("content", "好的，已经切换。")
+
+
+class FakeSwitchThenListLLM(FakeLLM):
+    """Switch folders, then keep going (list files), then answer — a multi-step turn."""
+
+    def __init__(self, target: str):
+        super().__init__()
+        self.target = target
+        self.calls = 0
+
+    def stream_agent(self, messages, tools):
+        self.calls += 1
+        if self.calls == 1:
+            yield StreamEvent(
+                "tool_call",
+                json.dumps({"id": "c1", "name": "switch_workspace", "arguments": json.dumps({"path": self.target})}),
+            )
+        elif self.calls == 2:
+            yield StreamEvent("tool_call", json.dumps({"id": "c2", "name": "list_files", "arguments": "{}"}))
+        else:
+            yield StreamEvent("content", "已切换并查看了文件。")
 
 
 class FileToolTests(unittest.TestCase):
@@ -504,6 +530,44 @@ class FileToolTests(unittest.TestCase):
             switch_events = [e for e in events if e.kind == "switch"]
             self.assertEqual(len(switch_events), 1)
             self.assertEqual(Path(switch_events[0].text).name, "数字电路")
+
+    def test_run_turn_continues_after_switch_with_more_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            other = Path(tmp) / "数字电路"
+            other.mkdir()
+            (other / "讲义.md").write_text("数字电路讲义", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeSwitchThenListLLM(str(other)))
+
+            events = list(router.run_turn("切到数字电路看看有什么文件"))
+
+            # switched in place, and the turn did NOT stop after the switch
+            self.assertEqual(router.workspace.course_name, "数字电路")
+            self.assertEqual(len([e for e in events if e.kind == "switch"]), 1)
+            self.assertGreaterEqual(len([e for e in events if e.kind == "tool"]), 2)
+            content = "".join(e.text for e in events if e.kind == "content")
+            self.assertIn("已切换并查看了文件", content)
+
+    def test_read_pptx_extracts_slide_text_without_ingest(self):
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            presentation = Presentation()
+            slide = presentation.slides.add_slide(presentation.slide_layouts[6])  # blank
+            title_box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1))
+            title_box.text_frame.text = "采样定理"
+            body_box = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(6), Inches(2))
+            body_box.text_frame.text = "离散采样无失真还原连续信号"
+            presentation.save(str(workspace.root / "lecture.pptx"))
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, _, _ = router._execute_tool({"name": "read_file", "arguments": '{"path": "lecture.pptx"}'})
+
+            self.assertIn("采样定理", text)
+            self.assertIn("离散采样无失真还原连续信号", text)
+            self.assertNotIn("/ingest", text)  # fast python-pptx path, no MinerU needed
 
     def test_validate_switch_path_rejects_missing_dir(self):
         with tempfile.TemporaryDirectory() as tmp:

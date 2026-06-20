@@ -722,8 +722,10 @@ class CramTuiApp(App):
             pass
 
     def _switch_workspace(self, path: str) -> None:
+        # The running router switches itself in place (see CommandRouter._apply_switch_workspace),
+        # so only sync the app's view here — never rebuild self.router mid-turn or the active
+        # generator would be orphaned and the multi-step turn would stop after the switch.
         self.workspace = CramWorkspace.open(path)
-        self.router = CommandRouter(self.workspace)
         self.memory = MemoryStore.open(self.workspace)
         self.title = f"cram - {self.workspace.root}"
         self.sub_title = self.workspace.course_name
