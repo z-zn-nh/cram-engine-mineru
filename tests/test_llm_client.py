@@ -163,6 +163,35 @@ class LLMClientTests(unittest.TestCase):
             [("reasoning", "想"), ("content", "答")],
         )
 
+    def test_stream_chat_yields_usage_from_final_chunk(self):
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                text=(
+                    'data: {"choices":[{"delta":{"content":"hi"}}]}\n\n'
+                    'data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":80,"prompt_cache_hit_tokens":1000}}\n\n'
+                    "data: [DONE]\n\n"
+                ),
+                headers={"content-type": "text/event-stream"},
+            )
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        with patch.dict(os.environ, {"CRAM_TEST_API_KEY": "secret"}, clear=True):
+            client = OpenAICompatibleClient(_settings(), http_client=http_client)
+            events = list(client.stream_chat([{"role": "user", "content": "x"}]))
+
+        self.assertTrue(captured["body"]["stream_options"]["include_usage"])
+        usage_events = [e for e in events if e.kind == "usage"]
+        self.assertEqual(len(usage_events), 1)
+        usage = json.loads(usage_events[0].text)
+        self.assertEqual(usage["prompt_tokens"], 1200)
+        self.assertEqual(usage["prompt_cache_hit_tokens"], 1000)
+        # the empty-choices usage chunk must not crash or emit content
+        self.assertEqual([e.text for e in events if e.kind == "content"], ["hi"])
+
     def test_stream_chat_surfaces_error_event(self):
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(

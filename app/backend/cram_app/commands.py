@@ -467,6 +467,8 @@ class CommandRouter:
                             tool_calls.append(json.loads(event.text))
                         except ValueError:
                             continue
+                    elif event.kind == "usage":
+                        yield event
                 if not tool_calls:
                     break
                 messages.append(

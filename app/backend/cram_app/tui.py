@@ -1,9 +1,11 @@
 from __future__ import annotations
 from functools import partial
 from pathlib import Path
+import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 from rich.markup import escape
 from rich.text import Text
@@ -447,6 +449,7 @@ class CramTuiApp(App):
         self._menu_commands: list[str] = []
         self._generating = False
         self._active_worker = None
+        self._last_metrics = ""
 
     def compose(self) -> ComposeResult:
         yield Static(self._status_text(), id="status")
@@ -668,6 +671,7 @@ class CramTuiApp(App):
         reasoning_parts: list[str] = ["准备上下文，等待模型返回…"]
         content_parts: list[str] = []
         wrote_paths: list[Path] = []
+        usage_totals = {"prompt": 0, "completion": 0, "cache_hit": 0}
         first_content = False
         saw_model_reasoning = False
         try:
@@ -688,6 +692,17 @@ class CramTuiApp(App):
                     wrote_paths.append(Path(event.text))
                 elif event.kind == "switch":
                     self.call_from_thread(self._switch_workspace, event.text)
+                elif event.kind == "usage":
+                    try:
+                        usage = json.loads(event.text)
+                    except ValueError:
+                        usage = {}
+                    cached = usage.get("prompt_cache_hit_tokens")
+                    if cached is None:
+                        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+                    usage_totals["prompt"] += int(usage.get("prompt_tokens") or 0)
+                    usage_totals["completion"] += int(usage.get("completion_tokens") or 0)
+                    usage_totals["cache_hit"] += int(cached or 0)
                 else:
                     if not first_content:
                         first_content = True
@@ -711,6 +726,7 @@ class CramTuiApp(App):
                 stopped = "".join(content_parts)
                 stopped = (stopped + "\n\n[已停止生成]") if stopped else "[已停止生成]"
                 self.call_from_thread(self._update_message, ids["answer"], stopped)
+            self.call_from_thread(self._record_turn_metrics, usage_totals, time.monotonic() - start)
             self.call_from_thread(self._refresh_after_prompt)
 
     @work(exclusive=False, thread=True)
@@ -987,10 +1003,39 @@ class CramTuiApp(App):
     def _status_text(self) -> str:
         source_count = len(discover_workspace_sources(self.workspace.root))
         output_count = len([path for path in self.workspace.output_dir.rglob("*") if path.is_file()])
-        return (
+        base = (
             f"cram · {self.workspace.course_name} · {source_count} files · "
             f"{output_count} outputs · memory on · workspace {self.workspace.root}"
         )
+        if self._last_metrics:
+            base += f" · {self._last_metrics}"
+        return base
+
+    def _record_turn_metrics(self, usage: dict, latency: float) -> None:
+        prompt = int(usage.get("prompt", 0))
+        completion = int(usage.get("completion", 0))
+        cache_hit = int(usage.get("cache_hit", 0))
+        total = prompt + completion
+        hit_rate = round(cache_hit / prompt * 100) if prompt else 0
+        if total:
+            self._last_metrics = f"{_fmt_tokens(total)} tok · 缓存 {hit_rate}% · {latency:.1f}s"
+        else:
+            self._last_metrics = f"{latency:.1f}s"
+        try:
+            log_dir = self.workspace.cram_dir / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            record = {
+                "time": datetime.now(timezone.utc).isoformat(),
+                "prompt_tokens": prompt,
+                "completion_tokens": completion,
+                "cache_hit_tokens": cache_hit,
+                "cache_hit_rate": hit_rate,
+                "latency_s": round(latency, 3),
+            }
+            with (log_dir / "turns.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def _hint_text(self) -> str:
         return "^q quit    ^l clear    drag+^c copy    ctrl+p commands    /help"
@@ -1027,6 +1072,10 @@ class CramTuiApp(App):
     def _setup_model_default(self) -> str:
         config = load_user_llm_config()
         return config.model if config else "gpt-4o-mini"
+
+
+def _fmt_tokens(n: int) -> str:
+    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
 def _has_llm_config() -> bool:

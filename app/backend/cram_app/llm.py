@@ -102,7 +102,12 @@ class OpenAICompatibleClient:
 
     def stream_chat(self, messages: list[dict]):
         url = self.settings.base_url.rstrip("/") + "/chat/completions"
-        payload = {"model": self.settings.model, "messages": messages, "stream": True}
+        payload = {
+            "model": self.settings.model,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -121,6 +126,7 @@ class OpenAICompatibleClient:
             detail = _extract_error_message(data) or (response.text or "").strip()[:300]
             raise LLMRequestError(f"LLM HTTP {response.status_code}: {detail}")
 
+        last_usage = None
         for line in response.iter_lines():
             line = line.strip()
             if not line or not line.startswith("data:"):
@@ -135,16 +141,20 @@ class OpenAICompatibleClient:
             detail = _extract_error_message(data)
             if detail:
                 raise LLMRequestError(f"LLM stream error: {detail}")
-            try:
-                delta = data["choices"][0].get("delta") or {}
-            except (KeyError, IndexError, TypeError) as exc:
-                raise LLMRequestError(f"Unexpected stream response shape: {exc}") from exc
+            if data.get("usage"):
+                last_usage = data["usage"]
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning:
                 yield StreamEvent("reasoning", str(reasoning))
             content = delta.get("content")
             if content:
                 yield StreamEvent("content", str(content))
+        if last_usage:
+            yield StreamEvent("usage", json.dumps(last_usage, ensure_ascii=False))
 
     def stream_agent(self, messages: list[dict], tools: list[dict]):
         """Stream a tool-calling turn.
@@ -158,6 +168,7 @@ class OpenAICompatibleClient:
             "model": self.settings.model,
             "messages": messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "tools": tools,
             "tool_choice": "auto",
         }
@@ -180,6 +191,7 @@ class OpenAICompatibleClient:
             raise LLMRequestError(f"LLM HTTP {response.status_code}: {detail}")
 
         tool_calls: dict[int, dict] = {}
+        last_usage = None
         for line in response.iter_lines():
             line = line.strip()
             if not line or not line.startswith("data:"):
@@ -194,10 +206,12 @@ class OpenAICompatibleClient:
             detail = _extract_error_message(data)
             if detail:
                 raise LLMRequestError(f"LLM stream error: {detail}")
-            try:
-                delta = data["choices"][0].get("delta") or {}
-            except (KeyError, IndexError, TypeError) as exc:
-                raise LLMRequestError(f"Unexpected stream response shape: {exc}") from exc
+            if data.get("usage"):
+                last_usage = data["usage"]
+            choices = data.get("choices") or []
+            if not choices:
+                continue
+            delta = choices[0].get("delta") or {}
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             if reasoning:
                 yield StreamEvent("reasoning", str(reasoning))
@@ -219,6 +233,8 @@ class OpenAICompatibleClient:
             slot = tool_calls[index]
             if slot["name"]:
                 yield StreamEvent("tool_call", json.dumps(slot, ensure_ascii=False))
+        if last_usage:
+            yield StreamEvent("usage", json.dumps(last_usage, ensure_ascii=False))
 
 
 def _safe_json(response: httpx.Response):
