@@ -395,7 +395,7 @@ class TuiAppContractTests(unittest.TestCase):
                         body = app._append_message("cram", "采样定理答案要点", color="#fab283")
                         await pilot.pause()
                         # prompt input keeps focus after a turn; selection lives on the screen
-                        app.query_one("#session-prompt", Input).focus()
+                        app.query_one("#session-prompt").focus()
                         app.screen.selections = {body: SELECT_ALL}
                         await pilot.pause()
                         await pilot.press("ctrl+c")
@@ -423,7 +423,7 @@ class TuiAppContractTests(unittest.TestCase):
                         await pilot.pause()
                         app._enter_session()
                         await pilot.pause()
-                        app.query_one("#session-prompt", Input).focus()
+                        app.query_one("#session-prompt").focus()
                         await pilot.press("/", "p")
                         await pilot.pause()
                         menu = app.query_one("#command-menu")
@@ -667,6 +667,33 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertIn("↑", idle)
         self.assertIn("●", busy)
         self.assertTrue(generating)
+
+    def test_prompt_is_softwrap_textarea_that_grows(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "通信原理")
+                    async with app.run_test(size=(60, 30)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        await pilot.pause()
+                        area = app.query_one("#session-prompt", module.PromptArea)
+                        soft = area.soft_wrap
+                        area.text = "第一行\n第二行\n第三行\n第四行"
+                        app._autosize_prompt(area)
+                        await pilot.pause()
+                        return soft, float(area.styles.height.value)
+
+        soft, height = asyncio.run(run())
+        self.assertTrue(soft)  # multi-line, wrapping input
+        self.assertGreater(height, 3)  # grew past the single-line minimum
 
 
 if __name__ == "__main__":

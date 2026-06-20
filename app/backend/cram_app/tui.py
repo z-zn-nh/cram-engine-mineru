@@ -7,12 +7,12 @@ import time
 
 from rich.markup import escape
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
 from textual.theme import Theme
-from textual.widgets import Button, Input, OptionList, Static
+from textual.widgets import Button, Input, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
@@ -66,6 +66,41 @@ OPENCODE_THEME = Theme(
         "border": PALETTE["border"],
     },
 )
+
+class PromptArea(TextArea):
+    """Multi-line, soft-wrapping chat input. Enter submits; Shift+Enter inserts a newline."""
+
+    def __init__(self, placeholder: str = "", *, id: str | None = None) -> None:
+        super().__init__(
+            "",
+            soft_wrap=True,
+            show_line_numbers=False,
+            tab_behavior="focus",
+            placeholder=placeholder,
+            id=id,
+        )
+
+    async def _on_key(self, event: events.Key) -> None:
+        app = self.app
+        if self.id in ("home-prompt", "session-prompt") and app._command_menu_visible():
+            if event.key == "down":
+                event.prevent_default(); event.stop(); app._menu_move(1); return
+            if event.key == "up":
+                event.prevent_default(); event.stop(); app._menu_move(-1); return
+            if event.key == "enter":
+                event.prevent_default(); event.stop(); app._run_highlighted_command(); return
+            if event.key == "escape":
+                event.prevent_default(); event.stop(); app._hide_command_menu(); return
+        if event.key == "enter":
+            event.prevent_default(); event.stop()
+            app._submit_prompt_area(self)
+            return
+        if event.key in ("shift+enter", "ctrl+enter"):
+            event.prevent_default(); event.stop()
+            self.insert("\n")
+            return
+        await super()._on_key(event)
+
 
 class _TuiCommandError:
     kind = "error"
@@ -312,6 +347,7 @@ class CramTuiApp(App):
     #home-prompt {
         width: 78;
         height: 3;
+        max-height: 10;
         margin-top: 1;
         padding: 1 1 1 2;
         background: #1e1e1e;
@@ -337,6 +373,7 @@ class CramTuiApp(App):
     #session-prompt {
         width: 1fr;
         height: 3;
+        max-height: 10;
         margin-left: 2;
         padding: 1 1 1 2;
         background: #1e1e1e;
@@ -352,7 +389,8 @@ class CramTuiApp(App):
 
     #prompt-row {
         dock: bottom;
-        height: 3;
+        height: auto;
+        max-height: 12;
         margin-bottom: 1;
     }
 
@@ -431,12 +469,12 @@ class CramTuiApp(App):
             with Center():
                 yield Static(self._logo_text(), id="home-logo")
                 yield Static(self._home_text(), id="home-card")
-                yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="home-prompt")
+                yield PromptArea('Ask anything... "/mindmap sampling theorem"', id="home-prompt")
         with Vertical(id="session", classes="hidden"):
             yield VerticalScroll(id="chat")
         yield OptionList(id="command-menu", classes="hidden")
         with Horizontal(id="prompt-row", classes="hidden"):
-            yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="session-prompt")
+            yield PromptArea('Ask anything... "/mindmap sampling theorem"', id="session-prompt")
             yield Button("↑", id="send-btn")
         yield Static(self._hint_text(), id="hints")
 
@@ -452,7 +490,7 @@ class CramTuiApp(App):
         if self._needs_llm_setup:
             self.query_one("#setup-api-key", Input).focus()
         else:
-            self.query_one("#home-prompt", Input).focus()
+            self.query_one("#home-prompt", PromptArea).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "setup-api-key":
@@ -463,45 +501,42 @@ class CramTuiApp(App):
             return
         if event.input.id == "setup-model":
             self._save_llm_setup()
-            return
-        if event.input.id in {"home-prompt", "session-prompt"} and self._command_menu_visible():
-            self._run_highlighted_command()
-            return
-        text = event.value.strip()
-        event.input.value = ""
-        self._handle_prompt(text)
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id not in {"home-prompt", "session-prompt"}:
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        area = event.text_area
+        if area.id not in ("home-prompt", "session-prompt"):
             return
+        self._autosize_prompt(area)
         if self._session_started:
             self._scroll_chat_to_bottom()
-        value = event.value
-        matches = self._filtered_commands(value)
+        matches = self._filtered_commands(area.text)
         if matches:
             self._show_command_menu(matches)
-            return
-        self._hide_command_menu()
-
-    def on_key(self, event) -> None:
-        if not self._command_menu_visible():
-            return
-        focused = self.focused
-        if focused is None or getattr(focused, "id", None) not in {"home-prompt", "session-prompt"}:
-            return
-        menu = self.query_one("#command-menu", OptionList)
-        if event.key == "down":
-            menu.action_cursor_down()
-            event.prevent_default()
-            event.stop()
-        elif event.key == "up":
-            menu.action_cursor_up()
-            event.prevent_default()
-            event.stop()
-        elif event.key == "escape":
+        else:
             self._hide_command_menu()
-            event.prevent_default()
-            event.stop()
+
+    def _autosize_prompt(self, area: "PromptArea") -> None:
+        try:
+            rows = area.wrapped_document.height
+        except Exception:
+            rows = area.text.count("\n") + 1
+        area.styles.height = max(3, min(10, rows + 2))
+
+    def _menu_move(self, delta: int) -> None:
+        menu = self.query_one("#command-menu", OptionList)
+        if delta > 0:
+            menu.action_cursor_down()
+        else:
+            menu.action_cursor_up()
+
+    def _submit_prompt_area(self, area: "PromptArea") -> None:
+        text = area.text.strip()
+        if not text:
+            return
+        area.text = ""
+        self._autosize_prompt(area)
+        self._hide_command_menu()
+        self._handle_prompt(text)
 
     def _command_menu_visible(self) -> bool:
         return bool(self._menu_commands) and not self.query_one("#command-menu", OptionList).has_class("hidden")
@@ -545,7 +580,7 @@ class CramTuiApp(App):
             command = self._menu_commands[index]
             focused = self.focused
             if focused is not None and getattr(focused, "id", None) in {"home-prompt", "session-prompt"}:
-                focused.value = ""
+                focused.text = ""
             self._hide_command_menu()
             self._handle_prompt(command)
 
@@ -561,13 +596,7 @@ class CramTuiApp(App):
                 self._submit_session_prompt()
 
     def _submit_session_prompt(self) -> None:
-        prompt = self.query_one("#session-prompt", Input)
-        text = prompt.value.strip()
-        if not text:
-            return
-        prompt.value = ""
-        self._hide_command_menu()
-        self._handle_prompt(text)
+        self._submit_prompt_area(self.query_one("#session-prompt", PromptArea))
 
     def _stop_generation(self) -> None:
         worker = self._active_worker
@@ -580,7 +609,7 @@ class CramTuiApp(App):
                 command = self._menu_commands[event.option_index]
                 focused = self.focused
                 if focused is not None and getattr(focused, "id", None) in {"home-prompt", "session-prompt"}:
-                    focused.value = ""
+                    focused.text = ""
                 self._hide_command_menu()
                 self._handle_prompt(command)
             return
@@ -707,7 +736,7 @@ class CramTuiApp(App):
         self._focus_session_prompt()
 
     def _focus_session_prompt(self) -> None:
-        self.query_one("#session-prompt", Input).focus()
+        self.query_one("#session-prompt", PromptArea).focus()
 
     def _refresh_after_prompt(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
@@ -936,10 +965,10 @@ class CramTuiApp(App):
             self.query_one("#session").remove_class("hidden")
             self.query_one("#prompt-row").remove_class("hidden")
             self._write_system(f"已更新配置 · 模型 {model}")
-            self.query_one("#session-prompt", Input).focus()
+            self.query_one("#session-prompt", PromptArea).focus()
         else:
             self.query_one("#home").remove_class("hidden")
-            self.query_one("#home-prompt", Input).focus()
+            self.query_one("#home-prompt", PromptArea).focus()
 
     def action_clear_chat(self) -> None:
         self.query_one("#chat", VerticalScroll).remove_children(".message")
@@ -952,7 +981,7 @@ class CramTuiApp(App):
         self.query_one("#session").remove_class("hidden")
         self.query_one("#home-prompt").add_class("hidden")
         self.query_one("#prompt-row").remove_class("hidden")
-        self.query_one("#session-prompt", Input).focus()
+        self.query_one("#session-prompt", PromptArea).focus()
         self._append_message("cram", f"session\nworkspace {self.workspace.root}", color=PALETTE["primary"])
 
     def _status_text(self) -> str:
