@@ -6,6 +6,13 @@ from unittest.mock import patch
 
 from app.backend.cram_app.commands import CommandRouter
 from app.backend.cram_app.llm import StreamEvent
+from app.backend.cram_app.teaching import (
+    KnowledgePoint,
+    TeachingSession,
+    has_active_session,
+    load_session,
+    save_session,
+)
 from app.backend.cram_app.workspace import CramWorkspace
 from app.backend.cram_app.workspace_ingest import MaterialIngestResult
 from app.backend.cram_app.workspace_index import ParsedTextSource
@@ -331,6 +338,86 @@ class TuiCommandTests(unittest.TestCase):
 
             # the artifact generation prompt received the focus
             self.assertIn("傅里叶变换", llm.messages[0]["content"])
+
+
+class FakeTeachLLM(FakeLLM):
+    """stream_agent calls start_teaching; chat returns the deconstruct tree; stream_chat teaches."""
+
+    def __init__(self, tree_json='{"points": [{"title": "采样定理", "hook": "none"}, {"title": "频谱混叠", "hook": "contrast"}]}'):
+        super().__init__()
+        self.tree_json = tree_json
+
+    def stream_agent(self, messages, tools):
+        yield StreamEvent("tool_call", json.dumps({"id": "c1", "name": "start_teaching", "arguments": '{"topic": "采样定理"}'}))
+
+    def chat(self, messages, *, stream=False):
+        self.messages = messages
+        return self.tree_json
+
+    def stream_chat(self, messages):
+        self.messages = messages
+        yield StreamEvent("content", "先想象你在录音…这就是采样定理。")
+
+
+class TeachingTurnTests(unittest.TestCase):
+    def test_run_turn_start_teaching_creates_session_and_shows_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeTeachLLM())
+
+            events = list(router.run_turn("教我采样定理"))
+
+            kinds = [e.kind for e in events]
+            content = "".join(e.text for e in events if e.kind == "content")
+            self.assertIn("tool", kinds)  # start_teaching surfaced as a tool action
+            self.assertIn("采样定理", content)  # the tree topic is shown directly
+            self.assertIn("频谱混叠", content)  # a deconstructed point
+            self.assertTrue(has_active_session(workspace))
+
+    def test_active_session_teaches_then_advances(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            save_session(
+                workspace,
+                TeachingSession(topic="采样定理", points=[KnowledgePoint("采样"), KnowledgePoint("混叠")]),
+            )
+            router = CommandRouter(workspace, llm=FakeTeachLLM())
+
+            list(router.run_turn("开始"))  # teach point 0
+            after_first = load_session(workspace)
+            self.assertTrue(after_first.started)
+            self.assertEqual(after_first.current, 0)
+
+            list(router.run_turn("懂了，继续"))  # advance to point 1
+            after_second = load_session(workspace)
+            self.assertEqual(after_second.current, 1)
+            self.assertEqual(after_second.points[0].status, "taught")
+
+    def test_active_session_stop_clears_session(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            save_session(workspace, TeachingSession(topic="采样定理", points=[KnowledgePoint("采样")]))
+            router = CommandRouter(workspace, llm=FakeTeachLLM())
+
+            events = list(router.run_turn("退出"))
+
+            self.assertFalse(has_active_session(workspace))
+            self.assertIn("退出", "".join(e.text for e in events if e.kind == "content"))
+
+    def test_teaching_finish_hands_off_to_quiz(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            save_session(
+                workspace,
+                TeachingSession(topic="采样定理", points=[KnowledgePoint("采样")], started=True, current=0),
+            )
+            router = CommandRouter(workspace, llm=FakeTeachLLM())
+
+            events = list(router.run_turn("懂了"))  # advance past the last point -> finished
+
+            content = "".join(e.text for e in events if e.kind == "content")
+            self.assertIn("/quiz", content)
+            self.assertFalse(has_active_session(workspace))
 
 
 if __name__ == "__main__":

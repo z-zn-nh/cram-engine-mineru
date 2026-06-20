@@ -14,6 +14,18 @@ from .llm import (
 )
 from .memory import MemoryStore
 from .settings import LLMSettings, load_effective_llm_config
+from .teaching import (
+    TeachingSession,
+    classify_teaching_input,
+    clear_session,
+    deconstruct_messages,
+    has_active_session,
+    load_session,
+    parse_tree,
+    render_tree,
+    save_session,
+    teach_messages,
+)
 from .workspace import CramWorkspace, discover_workspace_sources
 from .workspace_ingest import MaterialIngestResult, ingest_material_sources
 from .workspace_index import (
@@ -88,6 +100,7 @@ _TOOL_LABELS = {
     "ingest_materials": "导入并索引资料",
     "show_status": "查看状态",
     "lint_conflicts": "检查冲突",
+    "start_teaching": "开始系统教学",
 }
 
 
@@ -130,6 +143,23 @@ AGENT_TOOLS = [
     _plain_tool("ingest_materials", "扫描并用 MinerU 解析、索引当前课程文件夹里的资料（PDF/PPT/图片等）。用户要导入/解析/重新索引资料时调用。"),
     _plain_tool("show_status", "查看当前课程的资料数量、产物数量、记忆与索引状态。"),
     _plain_tool("lint_conflicts", "检查长期记忆、生成产物与原始资料之间的引用冲突。"),
+    {
+        "type": "function",
+        "function": {
+            "name": "start_teaching",
+            "description": "当用户想被系统地讲解/带着复习某个主题（如「教我X」「带我复习X」「我想系统学X」）时调用，进入四步教学法的互动教学（拆解知识点→逐点讲授）。只是单点答疑不要调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": '要系统教学的主题，例如 "期望理论" 或 "第3章 信道编码"。',
+                    }
+                },
+                "required": ["topic"],
+            },
+        },
+    },
 ]
 
 
@@ -352,6 +382,9 @@ class CommandRouter:
         Yields StreamEvent of kind reasoning/content/tool/wrote for the TUI. Falls back to a
         plain streamed answer when the client cannot do tool calls.
         """
+        if has_active_session(self.workspace):
+            yield from self._teaching_turn(message)
+            return
         if not hasattr(self.llm, "stream_agent"):
             yield from self.stream(message)
             return
@@ -384,11 +417,14 @@ class CommandRouter:
                         "tool_calls": [_api_tool_call(call) for call in tool_calls],
                     }
                 )
+                direct_text: str | None = None
                 for call in tool_calls:
                     yield StreamEvent("tool", _TOOL_LABELS.get(call.get("name", ""), call.get("name", "")))
-                    result_text, wrote = self._execute_tool(call)
+                    result_text, wrote, present_directly = self._execute_tool(call)
                     for path in wrote:
                         yield StreamEvent("wrote", str(path))
+                    if present_directly:
+                        direct_text = result_text
                     messages.append(
                         {
                             "role": "tool",
@@ -396,6 +432,10 @@ class CommandRouter:
                             "content": result_text,
                         }
                     )
+                if direct_text is not None:
+                    answer_parts.append(direct_text)
+                    yield StreamEvent("content", direct_text)
+                    break
         except LLMConfigurationError as exc:
             text = _llm_setup_message(exc)
             self.memory.append_session_event("agent", text)
@@ -414,7 +454,7 @@ class CommandRouter:
         if answer:
             self.memory.append_session_event("agent", answer)
 
-    def _execute_tool(self, call: dict) -> tuple[str, list[Path]]:
+    def _execute_tool(self, call: dict) -> tuple[str, list[Path], bool]:
         name = call.get("name", "")
         try:
             args = json.loads(call.get("arguments") or "{}")
@@ -429,15 +469,117 @@ class CommandRouter:
             if result.wrote:
                 title = ARTIFACT_COMMANDS[TOOL_ARTIFACTS[name]][1]
                 written = result.message.removeprefix("Wrote ").strip()
-                return (f"已生成《{title}》，写入 {written}。", result.wrote)
-            return (result.message, [])
+                return (f"已生成《{title}》，写入 {written}。", result.wrote, False)
+            return (result.message, [], False)
+        if name == "start_teaching":
+            topic = (args.get("topic") or "").strip()
+            if not topic:
+                return ("请说明要系统教学的主题。", [], True)
+            return (self._start_teaching(topic), [], True)
         if name == "ingest_materials":
-            return (self._ingest_status().message, [])
+            return (self._ingest_status().message, [], False)
         if name == "show_status":
-            return (self._status().message, [])
+            return (self._status().message, [], False)
         if name == "lint_conflicts":
-            return (self._lint().message, [])
-        return (f"未知工具：{name}", [])
+            return (self._lint().message, [], False)
+        return (f"未知工具：{name}", [], False)
+
+    def _teaching_evidence(self, query: str, *, limit: int = 6) -> str:
+        chunks = search_workspace_chunks(self.workspace, query, limit=limit)
+        if not chunks:
+            return ""
+        return "\n\n".join(f"[{chunk.citation_label}]\n{chunk.text}" for chunk in chunks)
+
+    def _start_teaching(self, topic: str) -> str:
+        evidence = self._teaching_evidence(topic, limit=8)
+        try:
+            tree_text = self.llm.chat(
+                deconstruct_messages(topic, self.workspace.course_name, evidence), stream=False
+            )
+        except LLMConfigurationError as exc:
+            return _llm_setup_message(exc)
+        except LLMRequestError as exc:
+            return f"拆解知识点失败，请检查模型配置与网络。\n{exc}"
+        points = parse_tree(tree_text)
+        if not points:
+            return f"没能拆出「{topic}」的知识点。换个更具体的主题，或先 /ingest 导入资料再试。"
+        session = TeachingSession(topic=topic, points=points)
+        save_session(self.workspace, session)
+        return render_tree(session)
+
+    def _teaching_turn(self, message: str):
+        session = load_session(self.workspace)
+        if session is None:
+            yield StreamEvent("content", "教学会话已结束。直接提问即可。")
+            return
+
+        self.memory.append_session_event("user", message)
+        action = classify_teaching_input(message)
+
+        if action == "stop":
+            clear_session(self.workspace)
+            text = "已退出教学模式。需要时再说「教我 <主题>」，或用 /quiz 检验。"
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+
+        if action == "advance" and session.started:
+            point = session.current_point()
+            if point is not None:
+                point.status = "taught"
+            session.current += 1
+
+        if session.finished:
+            clear_session(self.workspace)
+            text = (
+                f"「{session.topic}」的 {len(session.points)} 个知识点都讲完了。\n"
+                "输入 /quiz 出题检验，或说「教我 <新主题>」继续。"
+            )
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+
+        current = session.current_point()
+        evidence = self._teaching_evidence(current.title if current else session.topic, limit=5)
+        messages = teach_messages(
+            session, message, self.workspace.course_name, evidence, reteach=(action == "reteach")
+        )
+        parts: list[str] = []
+        try:
+            if hasattr(self.llm, "stream_chat"):
+                for event in self.llm.stream_chat(messages):
+                    if not isinstance(event, StreamEvent):
+                        event = StreamEvent("content", str(event))
+                    if event.kind == "content":
+                        parts.append(event.text)
+                    yield event
+            else:
+                text = self.llm.chat(messages, stream=False)
+                parts.append(text)
+                yield StreamEvent("content", text)
+        except LLMConfigurationError as exc:
+            text = _llm_setup_message(exc)
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+        except LLMRequestError as exc:
+            text = "LLM 请求失败，当前会话已保留。请检查模型服务地址、模型名和网络状态。\n" + str(exc)
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+
+        session.started = True
+        session.taught_since_checkin += 1
+        if session.taught_since_checkin >= 3 and session.current < len(session.points) - 1:
+            session.taught_since_checkin = 0
+            note = "\n\n（已连讲 3 个知识点。继续就直接回应；想检验输入 /quiz；想停说「退出」。）"
+            parts.append(note)
+            yield StreamEvent("content", note)
+        save_session(self.workspace, session)
+
+        answer = "".join(parts).strip()
+        if answer:
+            self.memory.append_session_event("agent", answer)
 
     def _agent_messages(self, message: str) -> list[dict]:
         system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent，可以调用工具。
@@ -446,6 +588,7 @@ class CommandRouter:
 
 工作方式：
 - 用户想要复习产物（速成计划/知识点整合/思维导图/题库/考前总结）时，调用对应的 generate_* 工具生成并写入文件；可用 focus 参数聚焦主题或题型。
+- 用户想被系统讲解、带着复习某个主题（「教我X」「带我过一遍X」「系统学X」）时，调用 start_teaching 进入四步教学法。
 - 用户想导入/解析/重新索引资料时，调用 ingest_materials。
 - 用户想了解资料/产物/记忆状态时调用 show_status；想检查冲突时调用 lint_conflicts。
 - 只是概念讲解、答疑、讨论时，直接用中文回答，不要调用工具。
