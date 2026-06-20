@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -33,6 +34,28 @@ class FakeReasoningLLM(FakeLLM):
         yield StreamEvent("reasoning", "先回忆采样定理…")
         yield StreamEvent("content", "采样")
         yield StreamEvent("content", "定理")
+
+
+class FakeAgentLLM(FakeLLM):
+    """Calls one tool on the first agent step, then answers on the second."""
+
+    def __init__(self, tool_name: str | None = None, artifact_body: str = "# 题库\nQ1. 采样定理是什么？"):
+        super().__init__()
+        self.tool_name = tool_name
+        self.artifact_body = artifact_body
+        self.agent_calls = 0
+
+    def stream_agent(self, messages: list[dict], tools: list[dict]):
+        self.agent_calls += 1
+        if self.agent_calls == 1 and self.tool_name:
+            yield StreamEvent("tool_call", json.dumps({"id": "c1", "name": self.tool_name, "arguments": "{}"}))
+        else:
+            yield StreamEvent("content", "已经帮你处理好了。")
+
+    def chat(self, messages: list[dict], *, stream: bool = False) -> str:
+        # used when a generate_* tool runs the artifact generation
+        self.messages = messages
+        return self.artifact_body
 
 
 class TuiCommandTests(unittest.TestCase):
@@ -247,6 +270,67 @@ class TuiCommandTests(unittest.TestCase):
             self.assertEqual(result.kind, "ask")
             self.assertIn("CRAM_LLM_API_KEY", result.message)
             self.assertIn("setx", result.message)
+
+    def test_run_turn_invokes_tool_then_answers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            llm = FakeAgentLLM(tool_name="generate_quiz")
+            router = CommandRouter(workspace, llm=llm)
+
+            events = list(router.run_turn("帮我出一套题"))
+
+            kinds = [event.kind for event in events]
+            self.assertIn("tool", kinds)
+            self.assertIn("wrote", kinds)
+            self.assertIn("content", kinds)
+            # the quiz artifact was actually generated and written
+            self.assertTrue((workspace.output_dir / "题库.md").is_file())
+            written = (workspace.output_dir / "题库.md").read_text(encoding="utf-8")
+            self.assertIn("采样定理是什么", written)
+            # the final answer is persisted to memory
+            self.assertEqual(router.memory.load_recent_session_events()[-1]["role"], "agent")
+
+    def test_run_turn_without_tool_just_streams_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            router = CommandRouter(workspace, llm=FakeAgentLLM(tool_name=None))
+
+            events = list(router.run_turn("讲一下采样定理"))
+
+            self.assertEqual([e.text for e in events if e.kind == "content"], ["已经帮你处理好了。"])
+            self.assertEqual([e.kind for e in events if e.kind == "tool"], [])
+
+    def test_run_turn_falls_back_to_plain_stream_without_tool_support(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp))
+            router = CommandRouter(workspace, llm=FakeStreamingLLM())
+
+            events = list(router.run_turn("讲一下采样定理"))
+
+            self.assertEqual([e.text for e in events if e.kind == "content"], ["采样", "定理"])
+
+    def test_run_turn_passes_focus_to_generated_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+
+            class FocusAgentLLM(FakeAgentLLM):
+                def stream_agent(self, messages, tools):
+                    self.agent_calls += 1
+                    if self.agent_calls == 1:
+                        yield StreamEvent(
+                            "tool_call",
+                            json.dumps({"id": "c1", "name": "generate_quiz", "arguments": '{"focus": "傅里叶变换"}'}),
+                        )
+                    else:
+                        yield StreamEvent("content", "已按傅里叶变换出题。")
+
+            llm = FocusAgentLLM()
+            router = CommandRouter(workspace, llm=llm)
+
+            list(router.run_turn("只出傅里叶变换的题"))
+
+            # the artifact generation prompt received the focus
+            self.assertIn("傅里叶变换", llm.messages[0]["content"])
 
 
 if __name__ == "__main__":

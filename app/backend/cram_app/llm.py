@@ -146,6 +146,80 @@ class OpenAICompatibleClient:
             if content:
                 yield StreamEvent("content", str(content))
 
+    def stream_agent(self, messages: list[dict], tools: list[dict]):
+        """Stream a tool-calling turn.
+
+        Yields StreamEvent of kind "reasoning"/"content" as they arrive, and one
+        "tool_call" event per assembled function call (text is JSON with id, name,
+        arguments) once the stream completes.
+        """
+        url = self.settings.base_url.rstrip("/") + "/chat/completions"
+        payload = {
+            "model": self.settings.model,
+            "messages": messages,
+            "stream": True,
+            "tools": tools,
+            "tool_choice": "auto",
+        }
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": _resolve_user_agent(),
+        }
+        try:
+            if self._http_client is not None:
+                response = self._http_client.post(url, json=payload, headers=headers)
+            else:
+                response = httpx.post(url, json=payload, headers=headers, timeout=self.timeout)
+        except httpx.HTTPError as exc:
+            raise LLMRequestError(f"LLM request failed: {exc}") from exc
+
+        if response.is_error:
+            data = _safe_json(response)
+            detail = _extract_error_message(data) or (response.text or "").strip()[:300]
+            raise LLMRequestError(f"LLM HTTP {response.status_code}: {detail}")
+
+        tool_calls: dict[int, dict] = {}
+        for line in response.iter_lines():
+            line = line.strip()
+            if not line or not line.startswith("data:"):
+                continue
+            payload_text = line.removeprefix("data:").strip()
+            if payload_text == "[DONE]":
+                break
+            try:
+                data = json.loads(payload_text)
+            except ValueError as exc:
+                raise LLMRequestError(f"Unexpected stream event: {payload_text[:120]}") from exc
+            detail = _extract_error_message(data)
+            if detail:
+                raise LLMRequestError(f"LLM stream error: {detail}")
+            try:
+                delta = data["choices"][0].get("delta") or {}
+            except (KeyError, IndexError, TypeError) as exc:
+                raise LLMRequestError(f"Unexpected stream response shape: {exc}") from exc
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            if reasoning:
+                yield StreamEvent("reasoning", str(reasoning))
+            content = delta.get("content")
+            if content:
+                yield StreamEvent("content", str(content))
+            for call in delta.get("tool_calls") or []:
+                index = call.get("index", 0)
+                slot = tool_calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if call.get("id"):
+                    slot["id"] = call["id"]
+                function = call.get("function") or {}
+                if function.get("name"):
+                    slot["name"] = function["name"]
+                if function.get("arguments"):
+                    slot["arguments"] += function["arguments"]
+
+        for index in sorted(tool_calls):
+            slot = tool_calls[index]
+            if slot["name"]:
+                yield StreamEvent("tool_call", json.dumps(slot, ensure_ascii=False))
+
 
 def _safe_json(response: httpx.Response):
     try:

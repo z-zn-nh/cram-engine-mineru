@@ -557,7 +557,7 @@ class CramTuiApp(App):
 
         self._enter_session()
         self._write_user(text)
-        if hasattr(self.router, "stream"):
+        if hasattr(self.router, "run_turn"):
             ids = self._write_agent_stream()
             self._run_prompt_worker(text, ids)
         else:
@@ -578,17 +578,23 @@ class CramTuiApp(App):
         self.call_from_thread(self._begin_thinking, ids["think"], start)
         reasoning_parts: list[str] = ["准备上下文，等待模型返回…"]
         content_parts: list[str] = []
+        wrote_paths: list[Path] = []
         first_content = False
         saw_model_reasoning = False
         try:
             self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
-            for event in self.router.stream(text):
+            for event in self.router.run_turn(text):
                 if event.kind == "reasoning":
                     if not saw_model_reasoning:
                         saw_model_reasoning = True
                         reasoning_parts.append("\n模型返回的思考内容：\n")
                     reasoning_parts.append(event.text)
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
+                elif event.kind == "tool":
+                    reasoning_parts.append(f"\n↪ {event.text}…\n")
+                    self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
+                elif event.kind == "wrote":
+                    wrote_paths.append(Path(event.text))
                 else:
                     if not first_content:
                         first_content = True
@@ -606,6 +612,8 @@ class CramTuiApp(App):
             self.call_from_thread(self._update_message, ids["answer"], f"LLM 请求失败，当前会话已保留。\n{exc}")
         finally:
             self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
+            if wrote_paths:
+                self.call_from_thread(self._write_wrote, wrote_paths)
             self.call_from_thread(self._refresh_after_prompt)
 
     @work(exclusive=False, thread=True)

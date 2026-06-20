@@ -177,6 +177,39 @@ class LLMClientTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMRequestError, "bad stream"):
                 list(client.stream_chat([{"role": "user", "content": "x"}]))
 
+    def test_stream_agent_forwards_tools_and_assembles_fragmented_tool_call(self):
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            frag1 = {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "id": "call_1", "function": {"name": "generate_quiz", "arguments": '{"foc'}}
+            ]}}]}
+            frag2 = {"choices": [{"delta": {"tool_calls": [
+                {"index": 0, "function": {"arguments": 'us":"傅里叶"}'}}
+            ]}}]}
+            text = (
+                f"data: {json.dumps(frag1)}\n\n"
+                f"data: {json.dumps(frag2)}\n\n"
+                "data: [DONE]\n\n"
+            )
+            return httpx.Response(200, text=text, headers={"content-type": "text/event-stream"})
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        tools = [{"type": "function", "function": {"name": "generate_quiz"}}]
+        with patch.dict(os.environ, {"CRAM_TEST_API_KEY": "secret"}, clear=True):
+            client = OpenAICompatibleClient(_settings(), http_client=http_client)
+            events = list(client.stream_agent([{"role": "user", "content": "出题"}], tools))
+
+        self.assertEqual(captured["body"]["tools"], tools)
+        self.assertEqual(captured["body"]["tool_choice"], "auto")
+        tool_events = [e for e in events if e.kind == "tool_call"]
+        self.assertEqual(len(tool_events), 1)
+        call = json.loads(tool_events[0].text)
+        self.assertEqual(call["id"], "call_1")
+        self.assertEqual(call["name"], "generate_quiz")
+        self.assertEqual(json.loads(call["arguments"]), {"focus": "傅里叶"})
+
 
 class FetchModelsTests(unittest.TestCase):
     def test_fetch_models_returns_unique_ids_in_order(self):

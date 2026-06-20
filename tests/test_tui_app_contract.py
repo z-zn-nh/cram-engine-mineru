@@ -554,7 +554,7 @@ class TuiAppContractTests(unittest.TestCase):
         module = importlib.import_module("app.backend.cram_app.tui")
 
         class StreamingRouter:
-            def stream(self, text):
+            def run_turn(self, text):
                 yield StreamEvent("reasoning", "先定位教材定义")
                 yield StreamEvent("reasoning", "，再合并公式")
                 yield StreamEvent("content", "这是答案")

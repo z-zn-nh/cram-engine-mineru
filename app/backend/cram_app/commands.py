@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,81 @@ HELP_TEXT = """可用命令：
 
 直接输入问题即可继续复习对话。
 """
+
+MAX_AGENT_STEPS = 4
+
+# Maps a tool name the model can call to the slash-style artifact key it generates.
+TOOL_ARTIFACTS = {
+    "generate_plan": "/plan",
+    "generate_notes": "/notes",
+    "generate_mindmap": "/mindmap",
+    "generate_quiz": "/quiz",
+    "generate_summary": "/summary",
+}
+
+_TOOL_LABELS = {
+    "generate_plan": "生成速成计划",
+    "generate_notes": "生成知识点整合",
+    "generate_mindmap": "生成思维导图",
+    "generate_quiz": "生成题库",
+    "generate_summary": "生成考前总结",
+    "ingest_materials": "导入并索引资料",
+    "show_status": "查看状态",
+    "lint_conflicts": "检查冲突",
+}
+
+
+def _artifact_tool(name: str, description: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "description": '可选，本次生成要聚焦的主题/章节/题型，例如 "傅里叶变换" 或 "只出计算题"。',
+                    }
+                },
+            },
+        },
+    }
+
+
+def _plain_tool(name: str, description: str) -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
+AGENT_TOOLS = [
+    _artifact_tool("generate_plan", "生成或更新考前速成计划，写入 cram-output/速成计划.md。"),
+    _artifact_tool("generate_notes", "把资料整合成结构化知识点笔记，写入 cram-output/知识点整合.md。"),
+    _artifact_tool("generate_mindmap", "生成思维导图（Markdown 层级），写入 cram-output/思维导图.md。"),
+    _artifact_tool("generate_quiz", "出题/生成题库或练习题，写入 cram-output/题库.md。"),
+    _artifact_tool("generate_summary", "生成考前冲刺总结/必背清单，写入 cram-output/考前总结.md。"),
+    _plain_tool("ingest_materials", "扫描并用 MinerU 解析、索引当前课程文件夹里的资料（PDF/PPT/图片等）。用户要导入/解析/重新索引资料时调用。"),
+    _plain_tool("show_status", "查看当前课程的资料数量、产物数量、记忆与索引状态。"),
+    _plain_tool("lint_conflicts", "检查长期记忆、生成产物与原始资料之间的引用冲突。"),
+]
+
+
+def _api_tool_call(call: dict) -> dict:
+    return {
+        "id": call.get("id") or call.get("name", ""),
+        "type": "function",
+        "function": {
+            "name": call.get("name", ""),
+            "arguments": call.get("arguments") or "{}",
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -146,12 +222,14 @@ class CommandRouter:
             ),
         )
 
-    def _write_artifact(self, command: str) -> CommandResult:
+    def _write_artifact(self, command: str, *, focus: str | None = None) -> CommandResult:
         filename, title, instruction = ARTIFACT_COMMANDS[command]
         output_path = self.workspace.output_dir / filename
-        evidence = self._collect_artifact_evidence()
+        evidence = self._collect_artifact_evidence(focus=focus)
         try:
-            body = self.llm.chat(self._artifact_messages(title, instruction, evidence), stream=False)
+            body = self.llm.chat(
+                self._artifact_messages(title, instruction, evidence, focus=focus), stream=False
+            )
         except LLMConfigurationError as exc:
             return CommandResult(kind="artifact", message=_llm_setup_message(exc))
         except LLMRequestError as exc:
@@ -169,7 +247,11 @@ class CommandRouter:
             wrote=[output_path],
         )
 
-    def _collect_artifact_evidence(self, *, limit_chars: int = 12000) -> list[ChunkRecord]:
+    def _collect_artifact_evidence(self, *, focus: str | None = None, limit_chars: int = 12000) -> list[ChunkRecord]:
+        if focus:
+            targeted = search_workspace_chunks(self.workspace, focus, limit=8)
+            if targeted:
+                return targeted
         selected: list[ChunkRecord] = []
         total = 0
         for chunk in load_workspace_chunks(self.workspace):
@@ -179,7 +261,9 @@ class CommandRouter:
             total += len(chunk.text)
         return selected
 
-    def _artifact_messages(self, title: str, instruction: str, evidence: list[ChunkRecord]) -> list[dict]:
+    def _artifact_messages(
+        self, title: str, instruction: str, evidence: list[ChunkRecord], *, focus: str | None = None
+    ) -> list[dict]:
         system_prompt = f"""你是期末速成引擎，为课程「{self.workspace.course_name}」生成可复用的复习产物：{title}。
 
 生成原则：
@@ -191,6 +275,8 @@ class CommandRouter:
 
 本次任务：{instruction}
 """
+        if focus:
+            system_prompt += f"\n用户对本次生成的具体要求（请重点聚焦）：{focus}\n"
         if evidence:
             evidence_block = "\n\n".join(
                 f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence
@@ -201,9 +287,10 @@ class CommandRouter:
                 "\n当前没有已索引的课程资料。请基于通用知识生成，"
                 "并在开头用一句话说明：未检索到课程资料，建议先运行 /ingest 导入资料。\n"
             )
+        user_request = f"请生成《{title}》。" + (f"重点：{focus}。" if focus else "")
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"请生成《{title}》。"},
+            {"role": "user", "content": user_request},
         ]
 
     @staticmethod
@@ -258,6 +345,127 @@ class CommandRouter:
             answer = "".join(content_parts)
             if answer:
                 self.memory.append_session_event("agent", answer)
+
+    def run_turn(self, message: str):
+        """Agentic turn: the model may call tools (generate/ingest/status/lint) or answer.
+
+        Yields StreamEvent of kind reasoning/content/tool/wrote for the TUI. Falls back to a
+        plain streamed answer when the client cannot do tool calls.
+        """
+        if not hasattr(self.llm, "stream_agent"):
+            yield from self.stream(message)
+            return
+
+        self.memory.append_session_event("user", message)
+        messages = self._agent_messages(message)
+        answer_parts: list[str] = []
+        try:
+            for _ in range(MAX_AGENT_STEPS):
+                assistant_content: list[str] = []
+                tool_calls: list[dict] = []
+                for event in self.llm.stream_agent(messages, AGENT_TOOLS):
+                    if event.kind == "reasoning":
+                        yield event
+                    elif event.kind == "content":
+                        assistant_content.append(event.text)
+                        answer_parts.append(event.text)
+                        yield event
+                    elif event.kind == "tool_call":
+                        try:
+                            tool_calls.append(json.loads(event.text))
+                        except ValueError:
+                            continue
+                if not tool_calls:
+                    break
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "".join(assistant_content),
+                        "tool_calls": [_api_tool_call(call) for call in tool_calls],
+                    }
+                )
+                for call in tool_calls:
+                    yield StreamEvent("tool", _TOOL_LABELS.get(call.get("name", ""), call.get("name", "")))
+                    result_text, wrote = self._execute_tool(call)
+                    for path in wrote:
+                        yield StreamEvent("wrote", str(path))
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id") or call.get("name", ""),
+                            "content": result_text,
+                        }
+                    )
+        except LLMConfigurationError as exc:
+            text = _llm_setup_message(exc)
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+        except LLMRequestError as exc:
+            text = (
+                "LLM 请求失败，当前会话已保留。请检查模型服务地址、模型名和网络状态。\n"
+                f"{exc}"
+            )
+            self.memory.append_session_event("agent", text)
+            yield StreamEvent("content", text)
+            return
+
+        answer = "".join(answer_parts).strip()
+        if answer:
+            self.memory.append_session_event("agent", answer)
+
+    def _execute_tool(self, call: dict) -> tuple[str, list[Path]]:
+        name = call.get("name", "")
+        try:
+            args = json.loads(call.get("arguments") or "{}")
+        except ValueError:
+            args = {}
+        if not isinstance(args, dict):
+            args = {}
+
+        if name in TOOL_ARTIFACTS:
+            focus = args.get("focus") or None
+            result = self._write_artifact(TOOL_ARTIFACTS[name], focus=focus)
+            if result.wrote:
+                title = ARTIFACT_COMMANDS[TOOL_ARTIFACTS[name]][1]
+                written = result.message.removeprefix("Wrote ").strip()
+                return (f"已生成《{title}》，写入 {written}。", result.wrote)
+            return (result.message, [])
+        if name == "ingest_materials":
+            return (self._ingest_status().message, [])
+        if name == "show_status":
+            return (self._status().message, [])
+        if name == "lint_conflicts":
+            return (self._lint().message, [])
+        return (f"未知工具：{name}", [])
+
+    def _agent_messages(self, message: str) -> list[dict]:
+        system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent，可以调用工具。
+
+当前课程文件夹：{self.workspace.course_name}
+
+工作方式：
+- 用户想要复习产物（速成计划/知识点整合/思维导图/题库/考前总结）时，调用对应的 generate_* 工具生成并写入文件；可用 focus 参数聚焦主题或题型。
+- 用户想导入/解析/重新索引资料时，调用 ingest_materials。
+- 用户想了解资料/产物/记忆状态时调用 show_status；想检查冲突时调用 lint_conflicts。
+- 只是概念讲解、答疑、讨论时，直接用中文回答，不要调用工具。
+- 调用工具后，用一两句话说明你做了什么、产物在哪，不要重复整篇内容。
+
+回答规则：
+- 用中文，结构清晰，适合考前快速复习。
+- 如果下方提供了课程资料片段，优先基于资料，并用方括号引用来源标签。
+- 不要编造不存在的资料来源或页码。
+"""
+        evidence = search_workspace_chunks(self.workspace, message, limit=5)
+        if evidence:
+            evidence_block = "\n\n".join(
+                f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence
+            )
+            system_prompt += f"\n课程资料片段：\n\n{evidence_block}\n"
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
+        ]
 
     def _llm_messages(self, message: str) -> list[dict]:
         system_prompt = f"""你是期末速成引擎，一个面向考前复习的中文学习 Agent。
