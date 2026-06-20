@@ -26,7 +26,7 @@ from .teaching import (
     save_session,
     teach_messages,
 )
-from .workspace import CramWorkspace, discover_workspace_sources
+from .workspace import SUPPORTED_SOURCE_EXTENSIONS, CramWorkspace, discover_workspace_sources
 from .workspace_ingest import MaterialIngestResult, ingest_material_sources
 from .workspace_index import (
     ChunkRecord,
@@ -101,6 +101,10 @@ _TOOL_LABELS = {
     "show_status": "查看状态",
     "lint_conflicts": "检查冲突",
     "start_teaching": "开始系统教学",
+    "list_files": "查看文件列表",
+    "read_file": "读取文件",
+    "grep_materials": "搜索资料",
+    "switch_workspace": "切换课程文件夹",
 }
 
 
@@ -157,6 +161,49 @@ AGENT_TOOLS = [
                     }
                 },
                 "required": ["topic"],
+            },
+        },
+    },
+    _plain_tool("list_files", "列出当前课程文件夹里的资料文件和已生成的产物（cram-output）。用户想看有哪些文件时调用。"),
+    {
+        "type": "function",
+        "function": {
+            "name": "read_file",
+            "description": "读取课程文件夹内某个文件的正文。md/txt 直接读；pdf/ppt/图片读其 MinerU 解析出的 markdown（没解析会提示先 /ingest）。只能读课程文件夹内的文件。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "相对课程文件夹的文件路径，例如 老师重点.pdf 或 cram-output/速成计划.md。"}
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "grep_materials",
+            "description": "在所有文本资料（md/txt 与已解析的 markdown）里按关键词搜索，返回命中文件、行号和该行内容。需要在原文里定位某个词出现在哪时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "要搜索的关键词或短语。"}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "switch_workspace",
+            "description": "把工作区切换到另一个课程文件夹。用户说「切换到/打开 <某个文件夹>」「换到XX课」时调用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "目标课程文件夹的路径（绝对路径，或相对当前文件夹）。"}
+                },
+                "required": ["path"],
             },
         },
     },
@@ -410,6 +457,23 @@ class CommandRouter:
                             continue
                 if not tool_calls:
                     break
+                switch_call = next((c for c in tool_calls if c.get("name") == "switch_workspace"), None)
+                if switch_call is not None:
+                    yield StreamEvent("tool", _TOOL_LABELS["switch_workspace"])
+                    try:
+                        switch_args = json.loads(switch_call.get("arguments") or "{}")
+                    except ValueError:
+                        switch_args = {}
+                    raw_path = switch_args.get("path") if isinstance(switch_args, dict) else None
+                    resolved, error = self._validate_switch_path(raw_path)
+                    if resolved is not None:
+                        yield StreamEvent("switch", str(resolved))
+                        text = f"已切换到课程文件夹：{resolved}"
+                    else:
+                        text = error
+                    answer_parts.append(text)
+                    yield StreamEvent("content", text)
+                    break
                 messages.append(
                     {
                         "role": "assistant",
@@ -482,7 +546,136 @@ class CommandRouter:
             return (self._status().message, [], False)
         if name == "lint_conflicts":
             return (self._lint().message, [], False)
+        if name == "list_files":
+            return (self._list_files(), [], False)
+        if name == "read_file":
+            return (self._read_file(str(args.get("path", ""))), [], False)
+        if name == "grep_materials":
+            return (self._grep_materials(str(args.get("query", ""))), [], False)
         return (f"未知工具：{name}", [], False)
+
+    def _resolve_in_workspace(self, rel_path: str) -> Path | None:
+        rel = (rel_path or "").strip().strip('"').strip("'")
+        if not rel:
+            return None
+        root = self.workspace.root.resolve()
+        try:
+            candidate = (root / rel).resolve() if not Path(rel).is_absolute() else Path(rel).resolve()
+        except (OSError, ValueError):
+            return None
+        if candidate == root or root in candidate.parents:
+            return candidate
+        return None
+
+    def _list_files(self) -> str:
+        sources = discover_workspace_sources(self.workspace.root)
+        outputs = sorted(
+            (path for path in self.workspace.output_dir.rglob("*") if path.is_file()),
+            key=lambda path: path.as_posix().lower(),
+        )
+        lines = [f"课程文件夹：{self.workspace.root}"]
+        if sources:
+            lines.append(f"资料（{len(sources)}）：")
+            lines.extend(f"  {source.relative_path.as_posix()}  [{source.kind}]" for source in sources)
+        else:
+            lines.append("资料：无（把 PDF/PPT/图片/笔记放进来，再运行 /ingest）")
+        if outputs:
+            lines.append(f"产物（{len(outputs)}）：")
+            lines.extend(f"  {path.relative_to(self.workspace.root).as_posix()}" for path in outputs)
+        return "\n".join(lines)
+
+    def _read_file(self, rel_path: str, *, max_chars: int = 8000) -> str:
+        target = self._resolve_in_workspace(rel_path)
+        if target is None:
+            return f"路径越界或为空：{rel_path}（只能读课程文件夹内的文件）"
+        if target.is_dir():
+            return f"{rel_path} 是文件夹，不是文件。用 list_files 查看内容。"
+        if target.exists() and target.suffix.lower() in {".md", ".txt"}:
+            return self._render_file_text(target, max_chars=max_chars)
+        if target.exists() and target.suffix.lower() in SUPPORTED_SOURCE_EXTENSIONS:
+            parsed = self._parsed_markdown_for(target)
+            if parsed:
+                return (
+                    f"{target.relative_to(self.workspace.root).as_posix()}（MinerU 解析结果）：\n\n"
+                    + self._render_file_text(parsed, max_chars=max_chars, with_header=False)
+                )
+            return (
+                f"{target.relative_to(self.workspace.root).as_posix()} 是 {target.suffix} 文件，"
+                "还没有解析。先运行 /ingest 解析后再读。"
+            )
+        if target.exists():
+            return self._render_file_text(target, max_chars=max_chars)
+        return f"找不到文件：{rel_path}"
+
+    def _render_file_text(self, path: Path, *, max_chars: int, with_header: bool = True) -> str:
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return f"读取失败：{exc}"
+        truncated = ""
+        if len(text) > max_chars:
+            text = text[:max_chars]
+            truncated = f"\n\n…（已截断，仅显示前 {max_chars} 字）"
+        body = text + truncated
+        if with_header:
+            return f"{path.relative_to(self.workspace.root).as_posix()}：\n\n{body}"
+        return body
+
+    def _parsed_markdown_for(self, source: Path) -> Path | None:
+        relative = source.relative_to(self.workspace.root)
+        parsed_dir = self.workspace.cram_dir / "parsed" / "__".join(relative.with_suffix("").parts)
+        if not parsed_dir.is_dir():
+            return None
+        markdown = sorted(parsed_dir.rglob("*.md"), key=lambda path: path.as_posix().lower())
+        return markdown[0] if markdown else None
+
+    def _grep_materials(self, query: str, *, max_hits: int = 30) -> str:
+        needle = (query or "").strip()
+        if not needle:
+            return "请给一个要搜索的关键词。"
+        lowered = needle.lower()
+        hits: list[str] = []
+        for path in self._text_files_for_grep():
+            try:
+                lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            rel = path.relative_to(self.workspace.root).as_posix()
+            for number, line in enumerate(lines, start=1):
+                if lowered in line.lower():
+                    hits.append(f"{rel}:{number}: {line.strip()[:120]}")
+                    if len(hits) >= max_hits:
+                        return f"「{needle}」命中 {len(hits)}+ 处（已截断）：\n" + "\n".join(hits)
+        if not hits:
+            return f"没在资料里找到「{needle}」。可能需要先 /ingest 解析 PDF/PPT。"
+        return f"「{needle}」命中 {len(hits)} 处：\n" + "\n".join(hits)
+
+    def _text_files_for_grep(self) -> list[Path]:
+        files = [
+            source.path
+            for source in discover_workspace_sources(self.workspace.root)
+            if source.path.suffix.lower() in {".md", ".txt"}
+        ]
+        parsed = sorted(
+            (self.workspace.cram_dir / "parsed").rglob("*.md"),
+            key=lambda path: path.as_posix().lower(),
+        )
+        return files + parsed
+
+    def _validate_switch_path(self, raw: str | None) -> tuple[Path | None, str]:
+        text = (raw or "").strip().strip('"').strip("'")
+        if not text:
+            return None, "请说明要切换到的课程文件夹路径。"
+        try:
+            candidate = Path(text).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.workspace.root / candidate
+            candidate = candidate.resolve()
+        except (OSError, ValueError):
+            return None, f"路径无法解析：{text}"
+        if not candidate.exists() or not candidate.is_dir():
+            return None, f"文件夹不存在：{candidate}"
+        return candidate, ""
 
     def _teaching_evidence(self, query: str, *, limit: int = 6) -> str:
         chunks = search_workspace_chunks(self.workspace, query, limit=limit)
@@ -590,6 +783,7 @@ class CommandRouter:
 - 用户想要复习产物（速成计划/知识点整合/思维导图/题库/考前总结）时，调用对应的 generate_* 工具生成并写入文件；可用 focus 参数聚焦主题或题型。
 - 用户想被系统讲解、带着复习某个主题（「教我X」「带我过一遍X」「系统学X」）时，调用 start_teaching 进入四步教学法。
 - 用户想导入/解析/重新索引资料时，调用 ingest_materials。
+- 用户想看有哪些文件、读某个文件、在资料里搜关键词、或换到别的课程文件夹时，分别用 list_files / read_file / grep_materials / switch_workspace。
 - 用户想了解资料/产物/记忆状态时调用 show_status；想检查冲突时调用 lint_conflicts。
 - 只是概念讲解、答疑、讨论时，直接用中文回答，不要调用工具。
 - 调用工具后，用一两句话说明你做了什么、产物在哪，不要重复整篇内容。

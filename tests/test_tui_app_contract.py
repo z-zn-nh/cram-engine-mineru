@@ -616,6 +616,30 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertEqual(names, ["速成计划.md"])
         self.assertTrue(has_action)
 
+    def test_switch_workspace_repoints_app(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                other = Path(tmp) / "数字电路"
+                other.mkdir()
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "通信原理")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        app._switch_workspace(str(other))
+                        await pilot.pause()
+                        return app.workspace.root.name, str(app.query_one("#status").content)
+
+        name, status = asyncio.run(run())
+        self.assertEqual(name, "数字电路")
+        self.assertIn("数字电路", status)
+
 
 if __name__ == "__main__":
     unittest.main()

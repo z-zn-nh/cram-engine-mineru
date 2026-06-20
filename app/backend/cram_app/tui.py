@@ -595,6 +595,8 @@ class CramTuiApp(App):
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 elif event.kind == "wrote":
                     wrote_paths.append(Path(event.text))
+                elif event.kind == "switch":
+                    self.call_from_thread(self._switch_workspace, event.text)
                 else:
                     if not first_content:
                         first_content = True
@@ -643,6 +645,15 @@ class CramTuiApp(App):
     def _refresh_after_prompt(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
         self._focus_session_prompt()
+
+    def _switch_workspace(self, path: str) -> None:
+        self.workspace = CramWorkspace.open(path)
+        self.router = CommandRouter(self.workspace)
+        self.memory = MemoryStore.open(self.workspace)
+        self.title = f"cram - {self.workspace.root}"
+        self.sub_title = self.workspace.course_name
+        self._wrote_paths = []
+        self.query_one("#status", Static).update(self._status_text())
 
     def _write_user(self, text: str) -> None:
         self._append_message("you", text, color=PALETTE["secondary"])

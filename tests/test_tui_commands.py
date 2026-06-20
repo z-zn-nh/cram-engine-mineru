@@ -420,5 +420,100 @@ class TeachingTurnTests(unittest.TestCase):
             self.assertFalse(has_active_session(workspace))
 
 
+class FakeSwitchLLM(FakeLLM):
+    def __init__(self, target: str):
+        super().__init__()
+        self.target = target
+
+    def stream_agent(self, messages, tools):
+        yield StreamEvent(
+            "tool_call",
+            json.dumps({"id": "c1", "name": "switch_workspace", "arguments": json.dumps({"path": self.target})}),
+        )
+
+
+class FileToolTests(unittest.TestCase):
+    def _router(self, root: Path) -> CommandRouter:
+        return CommandRouter(CramWorkspace.open(root), llm=FakeLLM())
+
+    def test_list_files_shows_sources_and_outputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "notes.md").write_text("hi", encoding="utf-8")
+            (workspace.output_dir / "速成计划.md").write_text("plan", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, wrote, direct = router._execute_tool({"name": "list_files", "arguments": "{}"})
+
+            self.assertIn("notes.md", text)
+            self.assertIn("cram-output/速成计划.md", text)
+            self.assertEqual(wrote, [])
+            self.assertFalse(direct)
+
+    def test_read_file_reads_text_within_workspace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "notes.md").write_text("奈奎斯特采样定理的内容", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, _, _ = router._execute_tool({"name": "read_file", "arguments": '{"path": "notes.md"}'})
+
+            self.assertIn("奈奎斯特采样定理的内容", text)
+
+    def test_read_file_blocks_path_traversal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (Path(tmp) / "secret.txt").write_text("机密", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, _, _ = router._execute_tool({"name": "read_file", "arguments": '{"path": "../secret.txt"}'})
+
+            self.assertIn("越界", text)
+            self.assertNotIn("机密", text)
+
+    def test_read_unparsed_pdf_suggests_ingest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "slides.pdf").write_text("pdf bytes", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, _, _ = router._execute_tool({"name": "read_file", "arguments": '{"path": "slides.pdf"}'})
+
+            self.assertIn("/ingest", text)
+
+    def test_grep_materials_returns_file_and_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "a.md").write_text("第一行\n采样定理很重要\n结尾", encoding="utf-8")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            text, _, _ = router._execute_tool({"name": "grep_materials", "arguments": '{"query": "采样定理"}'})
+
+            self.assertIn("a.md:2", text)
+            self.assertIn("采样定理很重要", text)
+
+    def test_run_turn_switch_workspace_emits_switch_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            other = Path(tmp) / "数字电路"
+            other.mkdir()
+            router = CommandRouter(workspace, llm=FakeSwitchLLM(str(other)))
+
+            events = list(router.run_turn("切换到数字电路那门课"))
+
+            switch_events = [e for e in events if e.kind == "switch"]
+            self.assertEqual(len(switch_events), 1)
+            self.assertEqual(Path(switch_events[0].text).name, "数字电路")
+
+    def test_validate_switch_path_rejects_missing_dir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            router = CommandRouter(CramWorkspace.open(Path(tmp) / "通信原理"), llm=FakeLLM())
+
+            resolved, error = router._validate_switch_path(str(Path(tmp) / "nope"))
+
+            self.assertIsNone(resolved)
+            self.assertIn("不存在", error)
+
+
 if __name__ == "__main__":
     unittest.main()
