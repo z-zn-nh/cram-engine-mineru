@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import math
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -104,15 +106,43 @@ def load_workspace_chunks(workspace: CramWorkspace) -> list[ChunkRecord]:
 
 
 def search_workspace_chunks(workspace: CramWorkspace, query: str, *, limit: int = 5) -> list[ChunkRecord]:
-    terms = _query_terms(query)
-    if not terms:
+    """Rank indexed chunks for a query with BM25 (IDF + document-length normalization).
+
+    Tokenizes ASCII words and CJK character bigrams, so it works for both English
+    and Chinese material without external dependencies. This is the keyword tier;
+    a local-embedding retriever can layer on top later behind the same call.
+    """
+    query_tokens = _tokenize(query)
+    if not query_tokens:
+        return []
+    chunks = load_workspace_chunks(workspace)
+    if not chunks:
         return []
 
-    scored: list[tuple[int, ChunkRecord]] = []
-    for chunk in load_workspace_chunks(workspace):
-        haystack = f"{chunk.source_file} {chunk.locator} {chunk.text}".lower()
-        score = sum(haystack.count(term) for term in terms)
-        if score:
+    docs = [_tokenize(f"{chunk.source_file} {chunk.locator} {chunk.text}") for chunk in chunks]
+    doc_count = len(docs)
+    avg_len = sum(len(doc) for doc in docs) / doc_count or 1.0
+    doc_freq: Counter[str] = Counter()
+    for doc in docs:
+        for token in set(doc):
+            doc_freq[token] += 1
+
+    k1, b = 1.5, 0.75
+    query_set = set(query_tokens)
+    scored: list[tuple[float, ChunkRecord]] = []
+    for chunk, doc in zip(chunks, docs):
+        if not doc:
+            continue
+        term_freq = Counter(doc)
+        doc_len = len(doc)
+        score = 0.0
+        for token in query_set:
+            freq = term_freq.get(token, 0)
+            if not freq:
+                continue
+            idf = math.log(1 + (doc_count - doc_freq[token] + 0.5) / (doc_freq[token] + 0.5))
+            score += idf * (freq * (k1 + 1)) / (freq + k1 * (1 - b + b * doc_len / avg_len))
+        if score > 0:
             scored.append((score, chunk))
 
     scored.sort(key=lambda item: (-item[0], item[1].chunk_id))
@@ -175,10 +205,12 @@ def _chunk_parsed_text(parsed: ParsedTextSource, text: str, *, max_chars: int = 
     ]
 
 
-def _query_terms(query: str) -> list[str]:
-    normalized = query.strip().lower()
-    terms = [term for term in re.split(r"\s+", normalized) if term]
-    compact = re.sub(r"\s+", "", normalized)
-    if compact and compact == normalized and len(compact) > 2:
-        terms.extend(compact[index : index + 2] for index in range(len(compact) - 1))
-    return list(dict.fromkeys(terms))
+def _tokenize(text: str) -> list[str]:
+    lowered = text.lower()
+    tokens = re.findall(r"[a-z0-9]+", lowered)
+    for run in re.findall(r"[一-鿿]+", lowered):
+        if len(run) == 1:
+            tokens.append(run)
+        else:
+            tokens.extend(run[index : index + 2] for index in range(len(run) - 1))
+    return tokens

@@ -73,5 +73,23 @@ class WorkspaceIndexTests(unittest.TestCase):
             self.assertIn("Formula OCR", chunks[0].text)
 
 
+    def test_bm25_prefers_focused_chunk_over_long_tangential_one(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            (workspace.root / "a.md").write_text(
+                "采样定理：采样率必须大于信号最高频率的两倍。", encoding="utf-8"
+            )
+            (workspace.root / "b.md").write_text(
+                "本章导论介绍了很多主题，包括傅里叶变换、卷积、滤波器、调制解调，内容很长很长很长很长。",
+                encoding="utf-8",
+            )
+            index_text_sources(workspace)
+
+            matches = search_workspace_chunks(workspace, "采样率", limit=2)
+
+            self.assertTrue(matches)
+            self.assertEqual(matches[0].source_file, "a.md")  # IDF + length-norm favors the focused chunk
+
+
 if __name__ == "__main__":
     unittest.main()
