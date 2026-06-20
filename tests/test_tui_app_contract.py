@@ -640,6 +640,30 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertEqual(name, "数字电路")
         self.assertIn("数字电路", status)
 
+    def test_prompt_status_indicator_present_and_updates(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "通信原理")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        status = app.query_one("#prompt-status")
+                        initial = str(status.content)
+                        app._set_prompt_status("● 思考中", "#fab283")
+                        await pilot.pause()
+                        return initial, str(status.content)
+
+        initial, working = asyncio.run(run())
+        self.assertIn("就绪", initial)
+        self.assertIn("思考中", working)
+
 
 if __name__ == "__main__":
     unittest.main()

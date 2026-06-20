@@ -515,5 +515,28 @@ class FileToolTests(unittest.TestCase):
             self.assertIn("不存在", error)
 
 
+class FakeLoopingLLM(FakeLLM):
+    """Always calls a tool and never answers, to exercise the agent step cap."""
+
+    def stream_agent(self, messages, tools):
+        yield StreamEvent("tool_call", json.dumps({"id": "c1", "name": "show_status", "arguments": "{}"}))
+
+    def stream_chat(self, messages):
+        yield StreamEvent("content", "已尽力检索，先这样。")
+
+
+class AgentLoopGuardTests(unittest.TestCase):
+    def test_run_turn_forces_final_answer_when_tool_loop_caps_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLoopingLLM())
+
+            events = list(router.run_turn("一直调工具看看"))
+
+            contents = [e.text for e in events if e.kind == "content"]
+            self.assertIn("已尽力检索，先这样。", contents)  # forced closing answer, not silence
+            self.assertEqual(router.memory.load_recent_session_events()[-1]["role"], "agent")
+
+
 if __name__ == "__main__":
     unittest.main()

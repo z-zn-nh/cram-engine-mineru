@@ -500,6 +500,18 @@ class CommandRouter:
                     answer_parts.append(direct_text)
                     yield StreamEvent("content", direct_text)
                     break
+            else:
+                # Hit the tool-call cap without a final answer; force a closing reply (no tools).
+                if not "".join(answer_parts).strip() and hasattr(self.llm, "stream_chat"):
+                    messages.append(
+                        {"role": "user", "content": "请基于上面的结果，用一两句话直接回复我，不要再调用工具。"}
+                    )
+                    for event in self.llm.stream_chat(messages):
+                        if not isinstance(event, StreamEvent):
+                            event = StreamEvent("content", str(event))
+                        if event.kind == "content":
+                            answer_parts.append(event.text)
+                        yield event
         except LLMConfigurationError as exc:
             text = _llm_setup_message(exc)
             self.memory.append_session_event("agent", text)

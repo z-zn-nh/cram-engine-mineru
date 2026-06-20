@@ -10,7 +10,7 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.command import DiscoveryHit, Hit, Hits, Provider
-from textual.containers import Center, Middle, Vertical, VerticalScroll
+from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
 from textual.theme import Theme
 from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
@@ -324,9 +324,9 @@ class CramTuiApp(App):
     }
 
     #session-prompt {
-        dock: bottom;
+        width: 1fr;
         height: 3;
-        margin: 0 2 1 2;
+        margin-left: 2;
         padding: 1 1 1 2;
         background: #1e1e1e;
         color: #eeeeee;
@@ -337,6 +337,23 @@ class CramTuiApp(App):
     #session-prompt:focus {
         border: none;
         border-left: thick #9d7cd8;
+    }
+
+    #prompt-row {
+        dock: bottom;
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    #prompt-status {
+        width: 12;
+        height: 3;
+        margin-left: 1;
+        margin-right: 2;
+        content-align: center middle;
+        text-align: center;
+        background: #1e1e1e;
+        color: #808080;
     }
 
     #hints {
@@ -399,7 +416,9 @@ class CramTuiApp(App):
         with Vertical(id="session", classes="hidden"):
             yield VerticalScroll(id="chat")
         yield OptionList(id="command-menu", classes="hidden")
-        yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="session-prompt", classes="hidden")
+        with Horizontal(id="prompt-row", classes="hidden"):
+            yield Input(placeholder='Ask anything... "/mindmap sampling theorem"', id="session-prompt")
+            yield Static("○ 就绪", id="prompt-status")
         yield Static(self._hint_text(), id="hints")
 
     def on_mount(self) -> None:
@@ -552,6 +571,7 @@ class CramTuiApp(App):
             self._enter_session()
             self._write_user(text)
             pending = self._write_agent("正在处理...")
+            self._set_prompt_status("● 处理中", PALETTE["primary"])
             self._run_command_worker(text, pending.id or "")
             return
 
@@ -562,6 +582,7 @@ class CramTuiApp(App):
             self._run_prompt_worker(text, ids)
         else:
             pending = self._write_agent("thinking…")
+            self._set_prompt_status("● 处理中", PALETTE["primary"])
             self._run_blocking_worker(text, pending.id or "")
 
     @work(exclusive=False, thread=True)
@@ -591,6 +612,7 @@ class CramTuiApp(App):
                     reasoning_parts.append(event.text)
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 elif event.kind == "tool":
+                    self.call_from_thread(self._set_prompt_status, "● 调用工具", PALETTE["accent"])
                     reasoning_parts.append(f"\n↪ {event.text}…\n")
                     self.call_from_thread(self._update_reasoning, ids["reason"], "".join(reasoning_parts))
                 elif event.kind == "wrote":
@@ -637,6 +659,7 @@ class CramTuiApp(App):
         if result.wrote:
             self._write_wrote(result.wrote)
         self.query_one("#status", Static).update(self._status_text())
+        self._set_prompt_status("○ 就绪")
         self._focus_session_prompt()
 
     def _focus_session_prompt(self) -> None:
@@ -644,7 +667,14 @@ class CramTuiApp(App):
 
     def _refresh_after_prompt(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
+        self._set_prompt_status("○ 就绪")
         self._focus_session_prompt()
+
+    def _set_prompt_status(self, label: str, color: str = PALETTE["muted"]) -> None:
+        try:
+            self.query_one("#prompt-status", Static).update(f"[{color}]{label}[/{color}]")
+        except Exception:
+            pass
 
     def _switch_workspace(self, path: str) -> None:
         self.workspace = CramWorkspace.open(path)
@@ -678,6 +708,7 @@ class CramTuiApp(App):
     def _begin_thinking(self, think_id: str, start: float) -> None:
         self._thinking = {"id": think_id, "start": start, "active": True}
         self.query_one(f"#{think_id}", Static).update("[#808080]● 思考中… 0s[/#808080]")
+        self._set_prompt_status("● 思考中", PALETTE["primary"])
         self._think_timer.resume()
 
     def _tick_thinking(self) -> None:
@@ -828,7 +859,7 @@ class CramTuiApp(App):
         self.query_one("#home").add_class("hidden")
         self.query_one("#session").add_class("hidden")
         self.query_one("#home-prompt").add_class("hidden")
-        self.query_one("#session-prompt").add_class("hidden")
+        self.query_one("#prompt-row").add_class("hidden")
         self.query_one("#llm-setup").remove_class("hidden")
         if auto_fetch:
             self._trigger_fetch_models()
@@ -858,7 +889,7 @@ class CramTuiApp(App):
         self.query_one("#llm-setup").add_class("hidden")
         if self._session_started:
             self.query_one("#session").remove_class("hidden")
-            self.query_one("#session-prompt").remove_class("hidden")
+            self.query_one("#prompt-row").remove_class("hidden")
             self._write_system(f"已更新配置 · 模型 {model}")
             self.query_one("#session-prompt", Input).focus()
         else:
@@ -875,7 +906,7 @@ class CramTuiApp(App):
         self.query_one("#home").add_class("hidden")
         self.query_one("#session").remove_class("hidden")
         self.query_one("#home-prompt").add_class("hidden")
-        self.query_one("#session-prompt").remove_class("hidden")
+        self.query_one("#prompt-row").remove_class("hidden")
         self.query_one("#session-prompt", Input).focus()
         self._append_message("cram", f"session\nworkspace {self.workspace.root}", color=PALETTE["primary"])
 
