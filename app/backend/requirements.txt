@@ -1,3 +1,5 @@
 httpx==0.28.1
 textual==6.10.0
 python-pptx==1.0.3
+numpy>=1.26
+fastembed==0.8.0

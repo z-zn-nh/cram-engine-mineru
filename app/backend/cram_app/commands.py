@@ -26,13 +26,13 @@ from .teaching import (
     save_session,
     teach_messages,
 )
+from .retrieval import retrieve
 from .workspace import SUPPORTED_SOURCE_EXTENSIONS, CramWorkspace, discover_workspace_sources
 from .workspace_ingest import MaterialIngestResult, ingest_material_sources
 from .workspace_index import (
     ChunkRecord,
     index_text_sources,
     load_workspace_chunks,
-    search_workspace_chunks,
     workspace_chunks_path,
 )
 
@@ -340,7 +340,7 @@ class CommandRouter:
 
     def _collect_artifact_evidence(self, *, focus: str | None = None, limit_chars: int = 12000) -> list[ChunkRecord]:
         if focus:
-            targeted = search_workspace_chunks(self.workspace, focus, limit=8)
+            targeted = retrieve(self.workspace, focus, limit=8)
             if targeted:
                 return targeted
         selected: list[ChunkRecord] = []
@@ -735,7 +735,7 @@ class CommandRouter:
         return candidate, ""
 
     def _teaching_evidence(self, query: str, *, limit: int = 6) -> str:
-        chunks = search_workspace_chunks(self.workspace, query, limit=limit)
+        chunks = retrieve(self.workspace, query, limit=limit)
         if not chunks:
             return ""
         return "\n\n".join(f"[{chunk.citation_label}]\n{chunk.text}" for chunk in chunks)
@@ -900,7 +900,7 @@ class CommandRouter:
     def _current_user_message(self, message: str) -> dict:
         # Volatile tail: per-turn retrieval rides with the latest user message, after the stable
         # prefix and the append-only history, so it never breaks the prompt cache.
-        evidence = search_workspace_chunks(self.workspace, message, limit=5)
+        evidence = retrieve(self.workspace, message, limit=5)
         if evidence:
             block = "\n\n".join(f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence)
             return {"role": "user", "content": f"{message}\n\n[本轮可参考的课程资料]\n{block}"}

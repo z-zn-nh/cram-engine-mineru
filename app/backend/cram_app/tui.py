@@ -1094,6 +1094,9 @@ def terminal_title_escape(title: str) -> str:
 
 
 def run_tui(workspace_path: Path | str = ".") -> None:
+    from .retrieval import set_embeddings_enabled
+
+    set_embeddings_enabled(True)  # real sessions use local embeddings; tests stay BM25-only/offline
     sys.stdout.write(terminal_title_escape(terminal_title_for_workspace(workspace_path)))
     sys.stdout.flush()
     CramTuiApp(workspace_path).run()
