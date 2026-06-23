@@ -7,6 +7,7 @@ import sys
 import time
 from datetime import datetime, timezone
 
+from rich.markdown import Markdown
 from rich.markup import escape
 from rich.text import Text
 from textual import events, work
@@ -715,6 +716,8 @@ class CramTuiApp(App):
                         )
                     content_parts.append(event.text)
                     self.call_from_thread(self._update_message, ids["answer"], "".join(content_parts))
+            if content_parts and not worker.is_cancelled:
+                self.call_from_thread(self._render_markdown, ids["answer"], "".join(content_parts))
         except Exception as exc:
             self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
             self.call_from_thread(self._update_message, ids["answer"], f"LLM 请求失败，当前会话已保留。\n{exc}")
@@ -878,6 +881,18 @@ class CramTuiApp(App):
         if not message_id:
             return
         self.query_one(f"#{message_id}", Static).update(Text(text))
+        self._scroll_chat_to_bottom()
+
+    def _render_markdown(self, message_id: str, text: str) -> None:
+        # Stream as plain text, then render the finished answer as Markdown (headings, bold,
+        # lists, code blocks, tables). Citations like [a.pdf:1] are plain text in Markdown,
+        # so they render literally rather than breaking.
+        if not message_id:
+            return
+        try:
+            self.query_one(f"#{message_id}", Static).update(Markdown(text))
+        except Exception:
+            self.query_one(f"#{message_id}", Static).update(Text(text))
         self._scroll_chat_to_bottom()
 
     def _scroll_chat_to_bottom(self) -> None:

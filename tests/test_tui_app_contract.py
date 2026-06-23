@@ -577,11 +577,13 @@ class TuiAppContractTests(unittest.TestCase):
                         answer = app.query_one("#chat .message:last-child .message-body")
                         reason_hidden = reason.has_class("hidden")
                         think_text = str(think.content)
+                        answer_content = answer.content
+                        answer_text = getattr(answer_content, "markup", None) or str(answer_content)
                         return (
                             reason_hidden,
                             str(reason.content),
                             think_text,
-                            str(answer.content),
+                            answer_text,
                         )
 
         reason_hidden, reason_text, think_text, answer_text = asyncio.run(run())
@@ -694,6 +696,34 @@ class TuiAppContractTests(unittest.TestCase):
         soft, height = asyncio.run(run())
         self.assertTrue(soft)  # multi-line, wrapping input
         self.assertGreater(height, 3)  # grew past the single-line minimum
+
+
+    def test_finished_answer_renders_as_markdown(self):
+        module = importlib.import_module("app.backend.cram_app.tui")
+
+        async def run():
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = Path(tmp) / "llm.json"
+                config_path.write_text(
+                    json.dumps({"api_key": "k", "base_url": "https://api.example.com/v1", "model": "m"}),
+                    encoding="utf-8",
+                )
+                with patch.dict("os.environ", {"CRAM_LLM_CONFIG_PATH": str(config_path)}, clear=True):
+                    app = module.CramTuiApp(Path(tmp) / "通信原理")
+                    async with app.run_test(size=(100, 30)) as pilot:
+                        await pilot.pause()
+                        app._enter_session()
+                        ids = app._write_agent_stream()
+                        await pilot.pause()
+                        app._render_markdown(ids["answer"], "# 标题\n\n- 一\n- 二\n\n**重点** [a.pdf:1]")
+                        await pilot.pause()
+                        from textual.widgets import Static
+
+                        body = app.query_one(f"#{ids['answer']}", Static)
+                        return type(body.content).__name__
+
+        renderable_type = asyncio.run(run())
+        self.assertEqual(renderable_type, "Markdown")
 
 
 if __name__ == "__main__":
