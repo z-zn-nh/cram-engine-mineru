@@ -43,6 +43,36 @@ def get_embedder(model_name: str = DEFAULT_EMBED_MODEL):
     return embedder
 
 
+# Optional cross-encoder reranker. Off by default: bge-reranker-base is ~1GB, so it is opt-in
+# (CRAM_RERANK=1) rather than auto-enabled like the small embedding model.
+DEFAULT_RERANK_MODEL = os.environ.get("CRAM_RERANK_MODEL", "BAAI/bge-reranker-base")
+_RERANKER_CACHE: dict[str, object] = {}
+_RERANK_ENABLED = os.environ.get("CRAM_RERANK", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def set_rerank_enabled(value: bool) -> None:
+    global _RERANK_ENABLED
+    _RERANK_ENABLED = value
+
+
+def get_reranker(model_name: str = DEFAULT_RERANK_MODEL):
+    """Return a cross-encoder reranker, or None if disabled/unavailable."""
+    if not _RERANK_ENABLED:
+        return None
+    if model_name in _RERANKER_CACHE:
+        return _RERANKER_CACHE[model_name]
+    try:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+    except ImportError:
+        return None
+    try:
+        reranker = TextCrossEncoder(model_name=model_name)
+    except Exception:
+        return None
+    _RERANKER_CACHE[model_name] = reranker
+    return reranker
+
+
 def retrieve(
     workspace: CramWorkspace,
     query: str,
@@ -51,29 +81,30 @@ def retrieve(
     candidates: int = 20,
     model_name: str = DEFAULT_EMBED_MODEL,
     embedder=_AUTO,
+    reranker=_AUTO,
 ) -> list[ChunkRecord]:
-    """Hybrid retrieval: BM25 + local embedding cosine, fused with RRF.
+    """Hybrid retrieval: BM25 + local embedding cosine (RRF), then optional cross-encoder rerank.
 
-    Degrades gracefully to BM25 alone whenever embeddings are unavailable (fastembed
-    not installed, model can't load, or no indexed chunks).
+    Degrades gracefully to BM25 alone when embeddings are unavailable, and skips reranking
+    unless a cross-encoder is enabled (CRAM_RERANK=1).
     """
     keyword_hits = search_workspace_chunks(workspace, query, limit=candidates)
     if embedder is _AUTO:
         embedder = get_embedder(model_name)
     if embedder is None:
-        return keyword_hits[:limit]
+        return _finalize(query, keyword_hits, limit, reranker)
 
     chunks = load_workspace_chunks(workspace)
     if not chunks:
-        return keyword_hits[:limit]
+        return _finalize(query, keyword_hits, limit, reranker)
 
     matrix = _ensure_embeddings(workspace, chunks, embedder, model_name)
     if matrix is None:
-        return keyword_hits[:limit]
+        return _finalize(query, keyword_hits, limit, reranker)
     try:
         query_vec = _normalize(np.asarray(list(embedder.query_embed([query]))[0], dtype=np.float32))
     except Exception:
-        return keyword_hits[:limit]
+        return _finalize(query, keyword_hits, limit, reranker)
 
     sims = matrix @ query_vec
     order = np.argsort(-sims)
@@ -85,7 +116,22 @@ def retrieve(
     fused_ids = _reciprocal_rank_fusion(
         [[chunk.chunk_id for chunk in keyword_hits], [chunk.chunk_id for chunk in vector_hits]]
     )
-    return [by_id[cid] for cid in fused_ids if cid in by_id][:limit]
+    fused = [by_id[cid] for cid in fused_ids if cid in by_id]
+    return _finalize(query, fused, limit, reranker)
+
+
+def _finalize(query: str, chunks: list[ChunkRecord], limit: int, reranker) -> list[ChunkRecord]:
+    if reranker is _AUTO:
+        reranker = get_reranker()
+    if reranker is not None and len(chunks) > 1:
+        try:
+            scores = list(reranker.rerank(query, [chunk.text for chunk in chunks]))
+            if len(scores) == len(chunks):
+                order = sorted(range(len(chunks)), key=lambda index: -scores[index])
+                chunks = [chunks[index] for index in order]
+        except Exception:
+            pass
+    return chunks[:limit]
 
 
 def _reciprocal_rank_fusion(rankings: list[list[str]], *, k: int = 60) -> list[str]:

@@ -67,6 +67,26 @@ class HybridRetrievalTests(unittest.TestCase):
             self.assertEqual(embedder.embed_calls, 1)  # corpus embedded once, then cached
             self.assertTrue((workspace.cram_dir / "index" / "embeddings.npy").is_file())
 
+    def test_reranker_reorders_candidates_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace, a, b = _two_doc_workspace(tmp)
+            # both docs are retrieved (similar embeddings); fusion would order a before b,
+            # but the cross-encoder scores b higher and must flip them.
+            embedder = FakeEmbedder({a.text: [1.0, 0.0], b.text: [0.9, 0.1], "QUERY": [1.0, 0.0]})
+            reranker = FakeReranker({a.text: 0.1, b.text: 0.9})
+
+            results = retrieve(workspace, "QUERY", limit=2, embedder=embedder, reranker=reranker)
+
+            self.assertEqual([r.source_file for r in results], ["b.md", "a.md"])
+
+
+class FakeReranker:
+    def __init__(self, scores: dict[str, float]):
+        self.scores = scores
+
+    def rerank(self, query, documents):
+        return [self.scores.get(document, 0.0) for document in documents]
+
 
 if __name__ == "__main__":
     unittest.main()
