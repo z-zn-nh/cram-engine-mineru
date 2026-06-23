@@ -21,6 +21,7 @@ from textual.worker import get_current_worker
 
 from .commands import CommandRouter
 from .llm import LLMRequestError, fetch_models
+from .mathtext import render_math
 from .memory import MemoryStore
 from .settings import (
     UserLLMConfig,
@@ -890,7 +891,7 @@ class CramTuiApp(App):
         if not message_id:
             return
         try:
-            self.query_one(f"#{message_id}", Static).update(Markdown(text))
+            self.query_one(f"#{message_id}", Static).update(Markdown(render_math(text)))
         except Exception:
             self.query_one(f"#{message_id}", Static).update(Text(text))
         self._scroll_chat_to_bottom()
