@@ -577,8 +577,10 @@ class TuiAppContractTests(unittest.TestCase):
                         answer = app.query_one("#chat .message:last-child .message-body")
                         reason_hidden = reason.has_class("hidden")
                         think_text = str(think.content)
-                        answer_content = answer.content
-                        answer_text = getattr(answer_content, "markup", None) or str(answer_content)
+                        answer_text = getattr(answer, "source", None)
+                        if answer_text is None:
+                            answer_content = answer.content
+                            answer_text = getattr(answer_content, "markup", None) or str(answer_content)
                         return (
                             reason_hidden,
                             str(reason.content),
@@ -698,7 +700,7 @@ class TuiAppContractTests(unittest.TestCase):
         self.assertGreater(height, 3)  # grew past the single-line minimum
 
 
-    def test_finished_answer_renders_as_markdown(self):
+    def test_finished_answer_renders_as_selectable_markdown(self):
         module = importlib.import_module("app.backend.cram_app.tui")
 
         async def run():
@@ -715,15 +717,25 @@ class TuiAppContractTests(unittest.TestCase):
                         app._enter_session()
                         ids = app._write_agent_stream()
                         await pilot.pause()
-                        app._render_markdown(ids["answer"], "# 标题\n\n- 一\n- 二\n\n**重点** [a.pdf:1]")
+                        app._render_markdown(ids["answer"], "# 标题\n\n- 一\n- 二\n\n**重点** [a.pdf:1]  $E=mc^2$")
                         await pilot.pause()
-                        from textual.widgets import Static
+                        from textual.widgets import Markdown
+                        from textual.widgets._markdown import MarkdownBlock
 
-                        body = app.query_one(f"#{ids['answer']}", Static)
-                        return type(body.content).__name__
+                        widgets = app.query("#chat Markdown")
+                        blocks = app.query(MarkdownBlock)
+                        return (
+                            len(widgets),
+                            widgets.first().source if widgets else "",
+                            all(block.ALLOW_SELECT for block in blocks) if blocks else False,
+                        )
 
-        renderable_type = asyncio.run(run())
-        self.assertEqual(renderable_type, "Markdown")
+        count, source, selectable = asyncio.run(run())
+        self.assertEqual(count, 1)  # the streaming Static was swapped for a Markdown widget
+        self.assertIn("标题", source)
+        self.assertIn("mc²", source)  # LaTeX converted to Unicode before rendering
+        self.assertTrue(selectable)  # its blocks are drag-selectable, unlike a Rich Markdown renderable
+
 
 
 if __name__ == "__main__":

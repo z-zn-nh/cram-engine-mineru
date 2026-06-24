@@ -8,7 +8,6 @@ import time
 import webbrowser
 from datetime import datetime, timezone
 
-from rich.markdown import Markdown
 from rich.markup import escape
 from rich.text import Text
 from textual import events, work
@@ -16,7 +15,7 @@ from textual.app import App, ComposeResult
 from textual.command import DiscoveryHit, Hit, Hits, Provider
 from textual.containers import Center, Horizontal, Middle, Vertical, VerticalScroll
 from textual.theme import Theme
-from textual.widgets import Button, Input, OptionList, Static, TextArea
+from textual.widgets import Button, Input, Markdown, OptionList, Static, TextArea
 from textual.widgets.option_list import Option
 from textual.worker import get_current_worker
 
@@ -200,6 +199,18 @@ class CramTuiApp(App):
         width: 100%;
         height: auto;
         color: #eeeeee;
+    }
+
+    Markdown {
+        width: 100%;
+        height: auto;
+        margin: 0;
+        padding: 0;
+        background: #0a0a0a;
+    }
+
+    MarkdownFence {
+        margin: 1 0;
     }
 
     .user-msg {
@@ -892,15 +903,26 @@ class CramTuiApp(App):
         self._scroll_chat_to_bottom()
 
     def _render_markdown(self, message_id: str, text: str) -> None:
-        # Stream as plain text, then render the finished answer as Markdown (headings, bold,
-        # lists, code blocks, tables). Citations like [a.pdf:1] are plain text in Markdown,
-        # so they render literally rather than breaking.
+        # Stream as plain text, then swap the finished answer for a Textual Markdown widget:
+        # it renders headings/lists/tables/code AND stays drag-selectable (its blocks are
+        # Static-based), unlike a Rich Markdown renderable which Textual can't select.
         if not message_id:
             return
         try:
-            self.query_one(f"#{message_id}", Static).update(Markdown(render_math(text)))
+            old = self.query_one(f"#{message_id}", Static)
         except Exception:
-            self.query_one(f"#{message_id}", Static).update(Text(text))
+            return
+        parent = old.parent
+        try:
+            widget = Markdown(render_math(text))
+            widget.add_class("message-body")
+            if parent is not None:
+                parent.mount(widget)
+                old.remove()
+            else:
+                old.update(Text(text))
+        except Exception:
+            old.update(Text(text))
         self._scroll_chat_to_bottom()
 
     def _scroll_chat_to_bottom(self) -> None:
