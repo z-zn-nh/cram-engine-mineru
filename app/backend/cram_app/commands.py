@@ -14,6 +14,15 @@ from .llm import (
     StreamEvent,
 )
 from .memory import MemoryStore
+from .mindmap import (
+    count_nodes,
+    normalize_root,
+    parse_outline,
+    to_markdown,
+    to_markmap_html,
+    to_opml,
+    validate_mindmap,
+)
 from .settings import LLMSettings, load_effective_llm_config
 from .teaching import (
     TeachingSession,
@@ -71,7 +80,7 @@ HELP_TEXT = """可用命令：
 /status   查看资料、记忆和输出状态
 /plan     生成速成计划
 /notes    生成知识点整合
-/mindmap  生成思维导图
+/mindmap  生成思维导图（校验结构 → 交互脑图 html + opml + md，浏览器打开）
 /quiz     生成题库
 /summary  生成考前总结
 /lint     检查记忆、输出和引用冲突
@@ -88,6 +97,7 @@ MAX_AGENT_STEPS = 8
 HISTORY_TURNS = 10
 KEEP_EVENTS = HISTORY_TURNS * 2  # most recent events kept verbatim; older ones fold into the summary
 COMPACT_MIN_FOLD = 6  # only summarize once at least this many events have aged out (batches LLM calls)
+MINDMAP_MAX_REPAIR = 2  # extra LLM tries to fix an invalid mind-map outline before giving up
 
 # Maps a tool name the model can call to the slash-style artifact key it generates.
 TOOL_ARTIFACTS = {
@@ -149,7 +159,7 @@ def _plain_tool(name: str, description: str) -> dict:
 AGENT_TOOLS = [
     _artifact_tool("generate_plan", "生成或更新考前速成计划，写入 cram-output/速成计划.md。"),
     _artifact_tool("generate_notes", "把资料整合成结构化知识点笔记，写入 cram-output/知识点整合.md。"),
-    _artifact_tool("generate_mindmap", "生成思维导图（Markdown 层级），写入 cram-output/思维导图.md。"),
+    _artifact_tool("generate_mindmap", "生成思维导图：校验结构后输出可在浏览器查看的交互脑图(思维导图.html)、可导入 XMind/幕布的 思维导图.opml、以及可编辑的 思维导图.md。可用 focus 指定主题或在已有导图上按反馈修改。"),
     _artifact_tool("generate_quiz", "出题/生成题库或练习题，写入 cram-output/题库.md。"),
     _artifact_tool("generate_summary", "生成考前冲刺总结/必背清单，写入 cram-output/考前总结.md。"),
     _plain_tool("ingest_materials", "扫描并用 MinerU 解析、索引当前课程文件夹里的资料（PDF/PPT/图片等）。用户要导入/解析/重新索引资料时调用。"),
@@ -274,6 +284,9 @@ class CommandRouter:
         if command == "/render":
             parts = message.split(maxsplit=1)
             return self._remember(self._render(parts[1] if len(parts) > 1 else ""))
+        if command == "/mindmap":
+            parts = message.split(maxsplit=1)
+            return self._remember(self._write_mindmap(parts[1].strip() if len(parts) > 1 else None))
         if command in ARTIFACT_COMMANDS:
             return self._remember(self._write_artifact(command))
 
@@ -342,6 +355,89 @@ class CommandRouter:
             message=f"Wrote {output_path.relative_to(self.workspace.root).as_posix()}",
             wrote=[output_path],
         )
+
+    def _write_mindmap(self, focus: str | None = None) -> CommandResult:
+        topic = (focus or self.workspace.course_name).strip() or "思维导图"
+        evidence = self._collect_artifact_evidence(focus=focus)
+        md_path = self.workspace.output_dir / "思维导图.md"
+        existing = md_path.read_text(encoding="utf-8") if md_path.exists() else ""
+
+        tree = None
+        error_note = ""
+        for _ in range(MINDMAP_MAX_REPAIR + 1):
+            try:
+                raw = self.llm.chat(
+                    self._mindmap_messages(topic, evidence, existing, focus, error_note), stream=False
+                )
+            except LLMConfigurationError as exc:
+                return CommandResult(kind="artifact", message=_llm_setup_message(exc))
+            except LLMRequestError as exc:
+                return CommandResult(
+                    kind="artifact",
+                    message="思维导图生成失败，未写入文件。请检查模型服务地址、模型名和网络状态。\n" + str(exc),
+                )
+            candidate = normalize_root(parse_outline(raw), topic)
+            errors = validate_mindmap(candidate)
+            if not errors:
+                tree = candidate
+                break
+            error_note = "；".join(errors)
+
+        if tree is None:
+            return CommandResult(
+                kind="artifact",
+                message=f"思维导图格式校验未通过（{error_note}），已放弃本次写入。换个说法或先 /ingest 再试。",
+            )
+
+        markdown = to_markdown(tree)
+        out = self.workspace.output_dir
+        out.mkdir(parents=True, exist_ok=True)
+        html_path = out / "思维导图.html"
+        opml_path = out / "思维导图.opml"
+        md_path.write_text(markdown, encoding="utf-8")
+        html_path.write_text(to_markmap_html(markdown, tree.label or topic), encoding="utf-8")
+        opml_path.write_text(to_opml(tree, tree.label or topic), encoding="utf-8")
+
+        def rel(path: Path) -> str:
+            return path.relative_to(self.workspace.root).as_posix()
+
+        return CommandResult(
+            kind="mindmap",
+            message=(
+                f"思维导图已生成并通过校验（{count_nodes(tree) + 1} 个节点）：\n"
+                f"  {rel(html_path)}（浏览器打开的交互脑图）\n"
+                f"  {rel(opml_path)}（可导入 XMind / 幕布 等编辑）\n"
+                f"  {rel(md_path)}（可直接编辑的源）"
+            ),
+            wrote=[html_path, opml_path, md_path],
+        )
+
+    def _mindmap_messages(
+        self, topic: str, evidence: list[ChunkRecord], existing: str, focus: str | None, error_note: str
+    ) -> list[dict]:
+        system_prompt = f"""你是期末速成引擎，为课程「{self.workspace.course_name}」生成主题「{topic}」的思维导图。
+
+只输出一棵 Markdown 多级列表树，严格遵守：
+- 第一行是根主题：`# {topic}`（可改成更贴切的总标题）
+- 其余每个节点用 `- ` 开头，每深一层缩进 2 个空格
+- 3 到 6 层，覆盖 章节 → 核心概念 → 关系 → 易混点 → 高频考点；结构优先，节点尽量短（≤15 字）
+- 不要输出代码块、不要解释、不要任何正文，只要这棵 markdown 列表树
+- 用到课程资料的节点，可在末尾用方括号标注来源标签
+"""
+        if existing and focus:
+            system_prompt += (
+                f"\n下面是当前的思维导图，请按用户的要求「{focus}」在它的基础上修改/补充，"
+                f"然后整体重新输出完整的树：\n\n{existing}\n"
+            )
+        if error_note:
+            system_prompt += f"\n上次输出有问题：{error_note}。请修正后重新只输出这棵 markdown 列表树。\n"
+        if evidence:
+            evidence_block = "\n\n".join(f"[{chunk.citation_label}]\n{chunk.text}" for chunk in evidence)
+            system_prompt += f"\n课程资料片段：\n\n{evidence_block}\n"
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"请输出「{topic}」的思维导图。"},
+        ]
 
     def _collect_artifact_evidence(self, *, focus: str | None = None, limit_chars: int = 12000) -> list[ChunkRecord]:
         if focus:
@@ -555,6 +651,9 @@ class CommandRouter:
 
         if name in TOOL_ARTIFACTS:
             focus = args.get("focus") or None
+            if name == "generate_mindmap":
+                result = self._write_mindmap(focus)
+                return (result.message, result.wrote, False)
             result = self._write_artifact(TOOL_ARTIFACTS[name], focus=focus)
             if result.wrote:
                 title = ARTIFACT_COMMANDS[TOOL_ARTIFACTS[name]][1]

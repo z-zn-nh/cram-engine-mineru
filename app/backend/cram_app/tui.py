@@ -739,6 +739,7 @@ class CramTuiApp(App):
             self.call_from_thread(self._end_thinking, ids["think"], time.monotonic() - start, ids["reason"], ids["index"])
             if wrote_paths:
                 self.call_from_thread(self._write_wrote, wrote_paths)
+                self.call_from_thread(self._open_html, wrote_paths)
             if worker.is_cancelled:
                 stopped = "".join(content_parts)
                 stopped = (stopped + "\n\n[已停止生成]") if stopped else "[已停止生成]"
@@ -758,11 +759,7 @@ class CramTuiApp(App):
         if result.kind == "model":
             self._open_llm_setup(auto_fetch=True)
             return
-        if result.kind == "render" and result.wrote:
-            try:
-                webbrowser.open(result.wrote[0].resolve().as_uri())
-            except Exception:
-                pass
+        self._open_html(result.wrote)
         if result.message:
             self._update_message(message_id, result.message)
         else:
@@ -775,6 +772,15 @@ class CramTuiApp(App):
 
     def _focus_session_prompt(self) -> None:
         self.query_one("#session-prompt", PromptArea).focus()
+
+    def _open_html(self, paths: list[Path]) -> None:
+        for path in paths:
+            if str(path).lower().endswith(".html"):
+                try:
+                    webbrowser.open(Path(path).resolve().as_uri())
+                except Exception:
+                    pass
+                return
 
     def _refresh_after_prompt(self) -> None:
         self.query_one("#status", Static).update(self._status_text())

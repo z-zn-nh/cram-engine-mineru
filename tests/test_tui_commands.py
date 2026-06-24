@@ -780,5 +780,54 @@ class RenderCommandTests(unittest.TestCase):
             self.assertIn("还没有可渲染", result.message)
 
 
+class FakeMindmapLLM(FakeLLM):
+    """First reply is an invalid flat line; the second is a valid outline — exercises repair."""
+
+    def __init__(self):
+        super().__init__()
+        self.calls = 0
+
+    def chat(self, messages, *, stream=False):
+        self.messages = messages
+        self.calls += 1
+        if self.calls == 1:
+            return "就这一行没有结构"
+        return "# 采样定理\n- 核心结论\n  - 采样率≥2倍\n- 混叠\n  - 抗混叠滤波\n"
+
+
+class MindmapCommandTests(unittest.TestCase):
+    def test_mindmap_validates_repairs_and_writes_three_formats(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            llm = FakeMindmapLLM()
+
+            result = CommandRouter(workspace, llm=llm).handle("/mindmap")
+
+            self.assertEqual(result.kind, "mindmap")
+            self.assertGreaterEqual(llm.calls, 2)  # invalid first attempt was repaired
+            out = workspace.output_dir
+            self.assertTrue((out / "思维导图.html").is_file())
+            self.assertTrue((out / "思维导图.opml").is_file())
+            self.assertTrue((out / "思维导图.md").is_file())
+            html = (out / "思维导图.html").read_text(encoding="utf-8")
+            self.assertIn("markmap-autoloader", html)
+            self.assertIn("采样定理", html)
+            self.assertEqual({p.suffix for p in result.wrote}, {".html", ".opml", ".md"})
+
+    def test_mindmap_gives_up_after_repeated_invalid_output(self):
+        class AlwaysBad(FakeLLM):
+            def chat(self, messages, *, stream=False):
+                return "一行"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+
+            result = CommandRouter(workspace, llm=AlwaysBad()).handle("/mindmap")
+
+            self.assertEqual(result.kind, "artifact")  # reported failure, not a mindmap
+            self.assertIn("校验未通过", result.message)
+            self.assertFalse((workspace.output_dir / "思维导图.html").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
