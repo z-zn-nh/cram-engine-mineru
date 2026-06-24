@@ -729,5 +729,56 @@ class CompactionTests(unittest.TestCase):
             self.assertEqual(router.memory.load_summarized_through(), 0)
 
 
+class RenderCommandTests(unittest.TestCase):
+    def _decode(self, html: str) -> str:
+        import base64
+        import re
+
+        token = re.search(r'atob\("([^"]+)"\)', html).group(1)
+        return base64.b64decode(token).decode("utf-8")
+
+    def test_render_builds_html_for_last_answer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+            router.memory.append_session_event("user", "讲采样定理")
+            router.memory.append_session_event("agent", r"采样定理：$f_s \geq 2f_{max}$。")
+
+            result = router.handle("/render")
+
+            self.assertEqual(result.kind, "render")
+            html_path = workspace.cram_dir / "render" / "latest.html"
+            self.assertEqual(result.wrote, [html_path])
+            html = html_path.read_text(encoding="utf-8")
+            self.assertIn("katex", html)  # real LaTeX rendering
+            self.assertIn("texmath", html)
+            decoded = self._decode(html)
+            self.assertIn("f_s", decoded)  # math kept as LaTeX for the browser to render
+            self.assertIn("采样定理", decoded)
+
+    def test_render_all_includes_both_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+            router.memory.append_session_event("user", "问题甲")
+            router.memory.append_session_event("agent", "回答乙")
+
+            result = router.handle("/render all")
+
+            decoded = self._decode((workspace.cram_dir / "render" / "latest.html").read_text(encoding="utf-8"))
+            self.assertIn("问题甲", decoded)
+            self.assertIn("回答乙", decoded)
+
+    def test_render_without_answer_reports_message(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = CramWorkspace.open(Path(tmp) / "通信原理")
+            router = CommandRouter(workspace, llm=FakeLLM())
+
+            result = router.handle("/render")
+
+            self.assertEqual(result.kind, "render")
+            self.assertIn("还没有可渲染", result.message)
+
+
 if __name__ == "__main__":
     unittest.main()

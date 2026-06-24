@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 from dataclasses import dataclass, field
@@ -74,6 +75,7 @@ HELP_TEXT = """可用命令：
 /quiz     生成题库
 /summary  生成考前总结
 /lint     检查记忆、输出和引用冲突
+/render   把最近回答渲染成网页（真公式）在浏览器打开（/render all 渲染整段会话）
 /config   重新配置 LLM
 /model    切换对话模型
 /help     查看命令
@@ -269,6 +271,9 @@ class CommandRouter:
             return CommandResult(kind="model", message="")
         if command == "/ingest":
             return self._remember(self._ingest_status())
+        if command == "/render":
+            parts = message.split(maxsplit=1)
+            return self._remember(self._render(parts[1] if len(parts) > 1 else ""))
         if command in ARTIFACT_COMMANDS:
             return self._remember(self._write_artifact(command))
 
@@ -965,6 +970,36 @@ class CommandRouter:
             {"role": "user", "content": user},
         ]
 
+    def _render(self, arg: str) -> CommandResult:
+        events = self.memory.load_all_session_events()
+        if (arg or "").strip().lower() == "all":
+            if not events:
+                return CommandResult(kind="render", message="还没有对话可渲染。")
+            blocks = []
+            for event in events:
+                if not event.get("content"):
+                    continue
+                role = "你" if event.get("role") == "user" else "cram"
+                blocks.append(f"### {role}\n\n{event['content']}")
+            content = "\n\n---\n\n".join(blocks)
+            title = f"{self.workspace.course_name} · 会话"
+        else:
+            answer = next(
+                (event.get("content", "") for event in reversed(events) if event.get("role") == "agent"),
+                "",
+            )
+            if not answer.strip():
+                return CommandResult(kind="render", message="还没有可渲染的回答，先问点东西。")
+            content = answer
+            title = f"{self.workspace.course_name} · 回答"
+
+        out_dir = self.workspace.cram_dir / "render"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / "latest.html"
+        path.write_text(_render_html_document(title, content), encoding="utf-8")
+        rel = path.relative_to(self.workspace.root).as_posix()
+        return CommandResult(kind="render", message=f"已生成 {rel}，正在浏览器打开。", wrote=[path])
+
     def _lint(self) -> CommandResult:
         conflicts = self.memory.load_conflicts()
         references = self.memory.build_reference_catalog()
@@ -1006,6 +1041,54 @@ def _extract_pptx_text(path: Path) -> str:
         if lines:
             blocks.append(f"# 第 {index} 页\n" + "\n".join(lines))
     return "\n\n".join(blocks)
+
+
+_RENDER_TEMPLATE = """<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.css">
+<style>
+  body{max-width:820px;margin:32px auto;padding:0 20px;background:#fafafa;color:#1a1a1a;
+       font-family:system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.75;}
+  h1,h2,h3{line-height:1.3;} h3{color:#555;border-top:1px solid #e3e3e3;padding-top:1em;}
+  pre{background:#f0f0f0;border-radius:6px;padding:12px;overflow:auto;}
+  code{background:#f0f0f0;border-radius:4px;padding:2px 5px;} pre code{background:none;padding:0;}
+  table{border-collapse:collapse;} th,td{border:1px solid #ccc;padding:6px 10px;}
+  blockquote{border-left:3px solid #ccc;margin:0;padding-left:1em;color:#555;}
+  .katex{font-size:1.05em;}
+</style>
+</head>
+<body>
+<article id="content">渲染中…（首次需要联网加载 KaTeX / markdown-it）</article>
+<script src="https://cdn.jsdelivr.net/npm/katex/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/markdown-it/dist/markdown-it.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/markdown-it-texmath/texmath.js"></script>
+<script>
+(function () {
+  var src = new TextDecoder().decode(Uint8Array.from(atob("__B64__"), function (c) { return c.charCodeAt(0); }));
+  var el = document.getElementById("content");
+  try {
+    var md = window.markdownit({ html: false, linkify: true })
+      .use(window.texmath, { engine: window.katex, delimiters: "dollars" });
+    el.innerHTML = md.render(src);
+  } catch (e) {
+    el.textContent = src;
+  }
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def _render_html_document(title: str, markdown: str) -> str:
+    import html as _html
+
+    encoded = base64.b64encode(markdown.encode("utf-8")).decode("ascii")
+    return _RENDER_TEMPLATE.replace("__TITLE__", _html.escape(title)).replace("__B64__", encoded)
 
 
 def _default_llm_client() -> LLMClient:

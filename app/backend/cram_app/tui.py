@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import time
+import webbrowser
 from datetime import datetime, timezone
 
 from rich.markdown import Markdown
@@ -124,6 +125,7 @@ PALETTE_COMMANDS = [
     ("/quiz", "生成题库"),
     ("/summary", "生成考前总结"),
     ("/lint", "检查记忆、输出和引用冲突"),
+    ("/render", "把回答渲染成网页（真公式）"),
     ("/config", "重新配置 LLM"),
     ("/model", "切换对话模型"),
     ("/help", "查看命令"),
@@ -632,7 +634,7 @@ class CramTuiApp(App):
             return
 
         command = text.split(maxsplit=1)[0].lower()
-        if command in {"/config", "/model", "/help", "/status", "/lint", "/ingest", "/plan", "/notes", "/mindmap", "/quiz", "/summary"}:
+        if command in {"/config", "/model", "/help", "/status", "/lint", "/ingest", "/render", "/plan", "/notes", "/mindmap", "/quiz", "/summary"}:
             if command == "/config":
                 self._open_llm_setup(auto_fetch=False)
                 return
@@ -745,6 +747,11 @@ class CramTuiApp(App):
         if result.kind == "model":
             self._open_llm_setup(auto_fetch=True)
             return
+        if result.kind == "render" and result.wrote:
+            try:
+                webbrowser.open(result.wrote[0].resolve().as_uri())
+            except Exception:
+                pass
         if result.message:
             self._update_message(message_id, result.message)
         else:
